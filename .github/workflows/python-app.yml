@@ -1,0 +1,84 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Python CI & Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+    - name: Lint with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Test with pytest
+      run: |
+        # [修正] 執行 pytest。如果 exit code 是 5 (找不到測試)，則視為成功 (exit 0)。
+        # 如果是其他錯誤 (例如 1, 2, 3, 4)，則視為失敗 (exit $?)。
+        pytest || (if [ $? -eq 5 ]; then echo "Pytest found no tests, which is fine."; exit 0; else exit $?; fi)
+
+  build-windows:
+    name: Build Windows Executable
+    # [新增] 這個 job 依賴 lint-and-test 成功
+    needs: lint-and-test 
+    # [新增] 在 Windows 虛擬機上執行
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # [新增] 安裝 PyInstaller
+        pip install pyinstaller
+        # [修正] 移除在 Windows (PowerShell) 上會出錯的 bash 'if' 語法。
+        # 在 build job 中，requirements.txt 是必需的，所以直接安裝。
+        pip install -r requirements.txt
+        
+    - name: Run build script
+      # [修正] 新增 env 環境變數，強制 Python 使用 UTF-8 輸出
+      env:
+        PYTHONIOENCODING: 'utf-8'
+      run: |
+        # [新增] 執行你的 build.py 腳本
+        python build.py
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        # [新增] 上傳打包好的 .exe
+        name: MeasurementAnalyzer-Windows
+        path: dist/MeasurementAnalyzer.exe
+
