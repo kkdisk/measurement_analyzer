@@ -11,9 +11,9 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QTableWidget, QTableWidgetItem, QHeaderView, 
                              QProgressBar, QMessageBox, QGroupBox, QCheckBox, QDialog,
-                             QTabWidget)
+                             QTabWidget, QTextEdit)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QBrush, QAction
+from PyQt6.QtGui import QColor, QBrush, QAction, QIcon
 
 # Matplotlib imports for plotting
 import matplotlib
@@ -22,7 +22,26 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 
-# 設定中文字型 (嘗試尋找系統可用中文字型，避免亂碼)
+# --- 版本資訊 ---
+APP_VERSION = "v1.1.0"
+APP_TITLE = f"量測數據分析工具 (Pro版) {APP_VERSION}"
+UPDATE_LOG = """
+=== 版本更新紀錄 ===
+
+[v1.1.0] - 2025/12/03
+1. [修正] 日期解析邏輯：新增對 Keyence 報告中文日期格式 (上午/下午) 的支援。
+   - 解決了趨勢圖中，日期字串排序錯誤的問題 (如 12/2 被排在 12/10 後面)。
+   - 現在所有數據均依照真實時間戳記 (Timestamp) 排序。
+2. [新增] 版本追蹤功能：加入版本號與更新日誌視窗。
+3. [優化] 提升了 CSV 檔頭解析的容錯率。
+
+[v1.0.0] - 2025/12/01
+1. 初始版本發布。
+2. 支援批次讀取 CSV、公差判定、Fail 統計。
+3. 支援 CPK 計算與視覺化圖表 (直方圖/趨勢圖)。
+"""
+
+# --- 設定中文字型 ---
 import matplotlib.font_manager as fm
 def set_chinese_font():
     # 常見的 Windows/Mac/Linux 中文字型清單
@@ -33,6 +52,72 @@ def set_chinese_font():
             matplotlib.rcParams['axes.unicode_minus'] = False # 解決負號顯示問題
             break
 set_chinese_font()
+
+# --- 日期解析工具 ---
+def parse_keyence_date(date_str):
+    """
+    解析 Keyence 特殊日期格式，例如: "2025/12/2 下午 03:08:11"
+    轉換為 Python datetime 物件以利正確排序
+    """
+    if not isinstance(date_str, str):
+        return None
+    
+    date_str = date_str.strip()
+    try:
+        # 使用正規表達式提取各個部分
+        # 格式: YYYY/M/D [上午/下午] H:M:S
+        match = re.match(r'(\d+)/(\d+)/(\d+)\s+(上午|下午)\s+(\d+):(\d+):(\d+)', date_str)
+        
+        if match:
+            year, month, day, ampm, hour, minute, second = match.groups()
+            year, month, day = int(year), int(month), int(day)
+            hour, minute, second = int(hour), int(minute), int(second)
+            
+            # 處理 12 小時制轉 24 小時制
+            if ampm == "下午" and hour < 12:
+                hour += 12
+            elif ampm == "上午" and hour == 12:
+                hour = 0
+                
+            return datetime(year, month, day, hour, minute, second)
+        else:
+            # 嘗試解析標準格式 (以防有些檔案格式不同)
+            # 嘗試幾種常見格式
+            formats = ["%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %p %I:%M:%S"]
+            for fmt in formats:
+                try:
+                    return datetime.strptime(date_str, fmt)
+                except ValueError:
+                    continue
+            return None
+    except Exception as e:
+        print(f"日期解析失敗 '{date_str}': {e}")
+        return None
+
+
+class VersionDialog(QDialog):
+    """顯示版本資訊與更新紀錄的視窗"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("版本資訊")
+        self.setGeometry(300, 300, 500, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        lbl_title = QLabel(APP_TITLE)
+        lbl_title.setStyleSheet("font-size: 16px; font-weight: bold; color: darkblue;")
+        layout.addWidget(lbl_title)
+        
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(UPDATE_LOG)
+        text_edit.setStyleSheet("font-family: Consolas, Monospace; font-size: 12px;")
+        layout.addWidget(text_edit)
+        
+        btn_close = QPushButton("關閉")
+        btn_close.clicked.connect(self.close)
+        layout.addWidget(btn_close)
+
 
 class DistributionPlotDialog(QDialog):
     """
@@ -112,16 +197,26 @@ class DistributionPlotDialog(QDialog):
         toolbar = NavigationToolbar(canvas, parent_widget)
         ax = fig.add_subplot(111)
         
-        # 嘗試依照時間排序 (如果有解析出時間)
+        # 嘗試依照時間排序
+        # 因為在讀取時已經將 '測量時間' 轉為 datetime 物件，這裡可以直接 sort_values
         df_sorted = self.df_item.copy()
-        if '測量時間' in df_sorted.columns and not df_sorted['測量時間'].isnull().all():
+        
+        has_time = False
+        if '測量時間' in df_sorted.columns:
+            # 確保欄位是 datetime 格式 (如果是 NaT 或 None 會排在最後或最前)
             try:
-                df_sorted = df_sorted.sort_values(by='測量時間')
-                x_label = "時間順序"
-            except:
-                x_label = "檔案讀取順序"
+                # 檢查是否大多數都是有效時間
+                valid_times = df_sorted['測量時間'].dropna()
+                if len(valid_times) > 0:
+                    df_sorted = df_sorted.sort_values(by='測量時間')
+                    has_time = True
+            except Exception as e:
+                print(f"Sorting error: {e}")
+        
+        if has_time:
+            x_label = "時間順序 (Time Series)"
         else:
-            x_label = "樣本索引"
+            x_label = "檔案讀取順序 (Sequence)"
             
         y_data = df_sorted['實測值']
         x_data = range(1, len(y_data) + 1)
@@ -133,14 +228,6 @@ class DistributionPlotDialog(QDialog):
         ax.axhline(self.usl, color='red', linestyle='--', alpha=0.5, label='USL')
         ax.axhline(self.lsl, color='red', linestyle='--', alpha=0.5, label='LSL')
         
-        # 標示出超出規格的點
-        fails = df_sorted[ (df_sorted['實測值'] > self.usl) | (df_sorted['實測值'] < self.lsl) ]
-        if not fails.empty:
-            # 找出這些點在原序列中的位置
-            # 這裡簡單處理：重新對應 index
-            # 實際應用建議用 scatter 覆蓋
-            pass 
-
         ax.set_title("量測值趨勢圖")
         ax.set_xlabel(x_label)
         ax.set_ylabel("數值")
@@ -285,7 +372,7 @@ class MeasurementAnalyzerApp(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("量測數據分析工具 (Pro版: 統計/視覺化/CPK)")
+        self.setWindowTitle(APP_TITLE) # 使用含版本號的標題
         self.setGeometry(100, 100, 1300, 800)
 
         # 儲存數據
@@ -330,7 +417,7 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.btn_stats.setMinimumHeight(40)
         self.btn_stats.setEnabled(False)
 
-        # [新增] 視覺化按鈕
+        # 視覺化按鈕
         self.btn_plot = QPushButton("4. 視覺化選定測項")
         self.btn_plot.setToolTip("請先在下方表格選擇某一列，再點擊此按鈕")
         self.btn_plot.clicked.connect(self.show_current_item_plot)
@@ -342,11 +429,17 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.btn_export.clicked.connect(self.export_data)
         self.btn_export.setMinimumHeight(40)
         self.btn_export.setEnabled(False)
+        
+        # [新增] 版本資訊按鈕
+        self.btn_version = QPushButton("關於")
+        self.btn_version.clicked.connect(self.show_version_info)
+        self.btn_version.setFixedSize(60, 40)
 
         func_layout.addWidget(self.chk_only_fail)
         func_layout.addWidget(self.btn_stats)
-        func_layout.addWidget(self.btn_plot) # Add to layout
+        func_layout.addWidget(self.btn_plot)
         func_layout.addWidget(self.btn_export)
+        func_layout.addWidget(self.btn_version) # 加入 Layout
         
         control_layout.addLayout(load_layout, 1)
         control_layout.addLayout(func_layout, 3)
@@ -381,6 +474,11 @@ class MeasurementAnalyzerApp(QMainWindow):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
         main_layout.addWidget(self.table_widget)
+        
+    def show_version_info(self):
+        """顯示版本資訊視窗"""
+        dlg = VersionDialog(self)
+        dlg.exec()
 
     def find_header_row_and_date(self, filepath):
         """尋找標題列以及嘗試解析日期"""
@@ -402,13 +500,8 @@ class MeasurementAnalyzerApp(QMainWindow):
                             parts = line.split(',')
                             if len(parts) > 1:
                                 time_str = parts[1].strip()
-                                # 嘗試解析日期，這裡做簡單處理，如果不標準則保留字串
-                                try:
-                                    # 處理中文 '下午'/'上午' -> PM/AM 的轉換邏輯比較複雜，這裡保留原字串或做簡單替換
-                                    # 若要排序精準，建議轉 datetime 物件
-                                    measure_time = time_str
-                                except:
-                                    pass
+                                # [修正] 使用自訂解析函式轉換為 datetime 物件
+                                measure_time = parse_keyence_date(time_str)
                             break
                     
                     # 2. 找 Header
@@ -418,7 +511,6 @@ class MeasurementAnalyzerApp(QMainWindow):
                             encoding_found = enc
                             return header_idx, encoding_found, measure_time
                     
-                    # 如果找不到 header 但編碼沒報錯，繼續換編碼試試 (不太可能發生)
                     if header_idx is None: 
                         continue
                         
@@ -503,7 +595,8 @@ class MeasurementAnalyzerApp(QMainWindow):
                         
                         # 加入 metadata
                         df.insert(0, '檔案名稱', filename)
-                        df.insert(1, '測量時間', measure_time if measure_time else "")
+                        # 這裡的 measure_time 已經是 datetime 物件 (或 None)
+                        df.insert(1, '測量時間', measure_time if measure_time else pd.NaT)
                         
                         if '測量專案' not in df.columns: df['測量專案'] = ''
 
@@ -582,7 +675,17 @@ class MeasurementAnalyzerApp(QMainWindow):
 
             for c in range(cols):
                 val = df.iloc[r, c]
-                item_text = f"{val:.4f}" if isinstance(val, float) else str(val)
+                item_text = ""
+                
+                # [優化] 針對時間欄位做格式化顯示
+                if c == 1 and isinstance(val, (datetime, pd.Timestamp)):
+                    if pd.notnull(val):
+                        item_text = val.strftime("%Y/%m/%d %H:%M:%S")
+                    else:
+                        item_text = ""
+                else:
+                    item_text = f"{val:.4f}" if isinstance(val, float) else str(val)
+                
                 item = QTableWidgetItem(item_text)
                 
                 if is_fail:

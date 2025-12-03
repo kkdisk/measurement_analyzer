@@ -8,20 +8,16 @@ MAIN_SCRIPT = "measurement_analyzer.py"
 APP_NAME = "MeasurementAnalyzer"
 
 def build_exe():
-    print("=== 開始打包應用程式 ===")
+    print(f"=== 開始打包應用程式: {APP_NAME} ===")
 
     # 1. 清理舊的构建資料夾 (確保乾淨打包)
-    if os.path.exists("build"):
-        try:
-            shutil.rmtree("build")
-        except Exception as e:
-            print(f"警告: 無法刪除 build 資料夾: {e}")
-
-    if os.path.exists("dist"):
-        try:
-            shutil.rmtree("dist")
-        except Exception as e:
-            print(f"警告: 無法刪除 dist 資料夾: {e}")
+    for folder in ["build", "dist"]:
+        if os.path.exists(folder):
+            try:
+                shutil.rmtree(folder)
+                print(f"已刪除舊資料夾: {folder}")
+            except Exception as e:
+                print(f"警告: 無法刪除 {folder} 資料夾: {e}")
 
     # 2. PyInstaller 參數設定
     # --onefile: 打包成單一 exe 檔
@@ -36,14 +32,23 @@ def build_exe():
         '--clean',
         '--noconfirm',
         # 若之後有 icon 圖示，可以取消註解下一行並放入 icon.ico
-        # '--icon=icon.ico',
+        # '--icon=app_icon.ico',
         
-        # 排除不需要的模組以減小體積 (可選)
+        # --- 排除不必要的模組 (瘦身優化) ---
         '--exclude-module=tkinter',
+        '--exclude-module=unittest',
+        '--exclude-module=email',
+        '--exclude-module=http',
+        '--exclude-module=xmlrpc',
         
-        # [重要修正] 排除 PyQt5 以解決與 PyQt6 的衝突 (Multiple Qt bindings error)
+        # Data Science 相關排除 (Pandas 容易引入過多未使用的依賴)
+        '--exclude-module=scipy',      # 若沒用到 scipy 高階功能可排除，節省大量空間
+        '--exclude-module=IPython',    # 排除互動式介面
+        '--exclude-module=notebook',
+        '--exclude-module=dask',
+        
+        # [重要修正] 排除 PyQt5/PySide 以解決與 PyQt6 的衝突 (Multiple Qt bindings error)
         '--exclude-module=PyQt5',
-        # 為了保險起見，同時排除其他可能導致衝突的 Qt bindings
         '--exclude-module=PySide2',
         '--exclude-module=PySide6',
     ]
@@ -54,7 +59,11 @@ def build_exe():
     try:
         PyInstaller.__main__.run(params)
         print(f"\n✅ 打包成功！")
-        print(f"執行檔位於: {os.path.abspath(os.path.join('dist', APP_NAME + '.exe'))}")
+        exe_path = os.path.abspath(os.path.join('dist', APP_NAME + '.exe'))
+        if os.path.exists(exe_path):
+            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
+            print(f"執行檔位於: {exe_path}")
+            print(f"檔案大小: {size_mb:.2f} MB")
     except Exception as e:
         print(f"\n❌ 打包失敗: {e}")
 
