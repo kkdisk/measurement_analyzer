@@ -2,3 +2,5 @@ pandas
 matplotlib
 PyQt6
 pyqtdarktheme
+pdfplumber
+pyinstaller

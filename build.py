@@ -27,31 +27,21 @@ def build_exe():
     params = [
         MAIN_SCRIPT,
         f'--name={APP_NAME}',
-        '--windowed',   # <--- 暫時註解掉，改用 console 模式以便查看錯誤
-        #'--console',    # <--- 開啟主控台模式，方便除錯 (確認穩定後可改回 windowed)
+        '--windowed',   # 隱藏主控台視窗 (正式發布用)
+        #'--console',    # 開啟主控台模式 (除錯用)
         '--onefile',
         '--clean',
         '--noconfirm',
-        # 若之後有 icon 圖示，可以取消註解下一行並放入 icon.ico
-        # '--icon=app_icon.ico',
+        # '--icon=app_icon.ico', # 若有 icon 可啟用
         
-        # --- 排除不必要的模組 (瘦身優化) ---
+        # --- 排除不必要的模組 ---
         '--exclude-module=tkinter',
-        
-        # [安全修正] 下列模組常被 pandas/matplotlib 間接依賴，過度排除會導致 EXE 無法執行
-        # 因此先註解掉，確保相容性優先
-        # '--exclude-module=unittest',
-        # '--exclude-module=email',  # Pandas 處理時間格式時常依賴此模組
-        # '--exclude-module=http',
-        # '--exclude-module=xmlrpc',
-        
-        # Data Science 相關排除 (Pandas 容易引入過多未使用的依賴)
-        '--exclude-module=scipy',      # 若沒用到 scipy 高階功能可排除，節省大量空間
-        '--exclude-module=IPython',    # 排除互動式介面
+        '--exclude-module=scipy',
+        '--exclude-module=IPython',
         '--exclude-module=notebook',
         '--exclude-module=dask',
         
-        # [重要修正] 排除 PyQt5/PySide 以解決與 PyQt6 的衝突 (Multiple Qt bindings error)
+        # 排除其他 Qt 綁定以避免衝突
         '--exclude-module=PyQt5',
         '--exclude-module=PySide2',
         '--exclude-module=PySide6',

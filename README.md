@@ -30,14 +30,14 @@
 
 請確保您的電腦已安裝 Python 3.8 或以上版本。
 
-### **1\. 下載專案**
+### **1. 下載專案**
 
-git clone \[https://github.com/kkdisk/measurement_analyzer.git\](https://github.com/kkdisk/measurement_analyzer.git)  
+git clone https://github.com/kkdisk/measurement_analyzer.git
 cd measurement-analyzer
 
-### **2\. 安裝依賴套件**
+### **2. 安裝依賴套件**
 
-pip install \-r requirements.txt
+pip install -r requirements.txt
 
 ## **使用方法**
 
@@ -45,7 +45,7 @@ pip install \-r requirements.txt
 
 在終端機 (Terminal) 中執行以下指令啟動應用程式：
 
-python measurement\_analyzer.py
+python measurement_analyzer.py
 
 ### **操作流程**
 
