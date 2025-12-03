@@ -21,13 +21,14 @@ def build_exe():
 
     # 2. PyInstaller 參數設定
     # --onefile: 打包成單一 exe 檔
-    # --windowed: 執行時不顯示黑色主控台視窗 (Console)
+    # --console: 顯示黑色主控台視窗 (除錯用，若程式閃退可以看到錯誤訊息)
     # --name: 指定執行檔名稱
     # --exclude-module: 排除不必要的套件以避免衝突或縮小體積
     params = [
         MAIN_SCRIPT,
         f'--name={APP_NAME}',
-        '--windowed',
+        '--windowed',   # <--- 暫時註解掉，改用 console 模式以便查看錯誤
+        #'--console',    # <--- 開啟主控台模式，方便除錯 (確認穩定後可改回 windowed)
         '--onefile',
         '--clean',
         '--noconfirm',
@@ -36,10 +37,13 @@ def build_exe():
         
         # --- 排除不必要的模組 (瘦身優化) ---
         '--exclude-module=tkinter',
-        '--exclude-module=unittest',
-        '--exclude-module=email',
-        '--exclude-module=http',
-        '--exclude-module=xmlrpc',
+        
+        # [安全修正] 下列模組常被 pandas/matplotlib 間接依賴，過度排除會導致 EXE 無法執行
+        # 因此先註解掉，確保相容性優先
+        # '--exclude-module=unittest',
+        # '--exclude-module=email',  # Pandas 處理時間格式時常依賴此模組
+        # '--exclude-module=http',
+        # '--exclude-module=xmlrpc',
         
         # Data Science 相關排除 (Pandas 容易引入過多未使用的依賴)
         '--exclude-module=scipy',      # 若沒用到 scipy 高階功能可排除，節省大量空間
@@ -64,6 +68,7 @@ def build_exe():
             size_mb = os.path.getsize(exe_path) / (1024 * 1024)
             print(f"執行檔位於: {exe_path}")
             print(f"檔案大小: {size_mb:.2f} MB")
+            #print(f"提示: 若執行時發生錯誤，請查看黑色視窗中的錯誤訊息。")
     except Exception as e:
         print(f"\n❌ 打包失敗: {e}")
 

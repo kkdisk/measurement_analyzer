@@ -29,7 +29,7 @@
 
 ### **1\. 下載專案**
 
-git clone \[https://github.com/yourusername/measurement-analyzer.git\](https://github.com/yourusername/measurement-analyzer.git)  
+git clone \[https://github.com/kkdisk/measurement_analyzer.git\](https://github.com/kkdisk/measurement_analyzer.git)  
 cd measurement-analyzer
 
 ### **2\. 安裝依賴套件**
