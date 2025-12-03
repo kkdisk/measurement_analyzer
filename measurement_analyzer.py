@@ -40,7 +40,7 @@ except ImportError:
     HAS_THEME_SUPPORT = False
 
 # --- 設定常數 ---
-APP_VERSION = "v2.0.2"
+APP_VERSION = "v2.0.3"
 APP_TITLE = f"量測數據分析工具 (Pro版) {APP_VERSION}"
 LOG_FILENAME = "measurement_analyzer.log"
 THEME_CONFIG_FILE = "theme_config.txt"
@@ -68,6 +68,11 @@ DISPLAY_COLUMNS = [
 
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+
+[v2.0.3] - 2025/12/04
+1. [新增] 自然排序功能：
+   - 修正 No 欄位排序邏輯，支援 alphanumeric 排序 (如 1, 2, 10, A1, A2)。
+   - 解決舊版排序錯亂問題。
 
 [v2.0.2] - 2025/12/03 (Font Fix)
 1. [修復] 圖表中文方塊問題：
@@ -145,6 +150,18 @@ def parse_keyence_date(date_str):
                 except ValueError: continue
             return None
     except: return None
+
+# --- 自然排序輔助函式 ---
+def natural_keys(text):
+    """
+    將字串拆解成 (text, number, text, number...) 的 tuple 以進行自然排序。
+    例如: "Item 10" -> ('item ', 10, '')
+    """
+    try:
+        text = str(text)
+        return tuple([int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)])
+    except Exception:
+        return (str(text),)
 
 # --- 背景執行緒 ---
 class FileLoaderThread(QThread):
@@ -342,8 +359,9 @@ class FileLoaderThread(QThread):
 class NumericTableWidgetItem(QTableWidgetItem):
     def __lt__(self, other):
         try:
-            return float(self.text()) < float(other.text())
-        except ValueError:
+            # 嘗試使用自然排序比較
+            return natural_keys(self.text()) < natural_keys(other.text())
+        except Exception:
             return super().__lt__(other)
 
 class VersionDialog(QDialog):
@@ -783,8 +801,11 @@ class MeasurementAnalyzerApp(QMainWindow):
             })
             
         self.stats_data = pd.DataFrame(stats_list)
-        self.stats_data['_sort_no'] = pd.to_numeric(self.stats_data['No'], errors='coerce')
-        self.stats_data.sort_values(by=["不良率(%)", "_sort_no"], ascending=[False, True], inplace=True)
+        
+        # [v2.0.3] 使用自然排序
+        self.stats_data['_sort_key'] = self.stats_data['No'].apply(natural_keys)
+        self.stats_data.sort_values(by=["不良率(%)", "_sort_key"], ascending=[False, True], inplace=True)
+        self.stats_data.drop(columns=['_sort_key'], inplace=True)
         
         total_items = len(self.stats_data)
         ng_items = len(self.stats_data[self.stats_data["NG數"] > 0])
@@ -866,7 +887,7 @@ class MeasurementAnalyzerApp(QMainWindow):
             if self.stats_data.empty: return
             path, _ = QFileDialog.getSaveFileName(self, "匯出統計報表", "Statistics.csv", "CSV (*.csv)")
             if path:
-                export_df = self.stats_data.drop(columns=["_design", "_upper", "_lower", "_sort_no"], errors='ignore')
+                export_df = self.stats_data.drop(columns=["_design", "_upper", "_lower", "_sort_key"], errors='ignore')
                 export_df.to_csv(path, index=False, encoding='utf-8-sig')
                 QMessageBox.information(self, "完成", "統計報表已匯出")
         elif curr_idx == 1: # Raw
