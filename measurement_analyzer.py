@@ -49,7 +49,7 @@ except ImportError:
     HAS_THEME_SUPPORT = False
 
 # --- 設定常數 ---
-APP_VERSION = "v2.0.3"
+APP_VERSION = "v2.1.0"
 APP_TITLE = f"量測數據分析工具 (Pro版) {APP_VERSION}"
 LOG_FILENAME = "measurement_analyzer.log"
 THEME_CONFIG_FILE = "theme_config.txt"
@@ -77,6 +77,21 @@ DISPLAY_COLUMNS = [
 
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+
+[v2.1.0] - 2025/12/04
+1. [新增] CPK 可靠性分析：
+   - 自動偵測小樣本 (<30)，顯示 ⚠ 警告並提供詳細 Tooltip。
+   - 異常數據 (std=0) 顯示 "---"。
+2. [新增] 進階自然排序 (Natural Sort)：
+   - 引入 natsort 庫，完美支援 "1, 2, 10, A1, A2" 等混合編號排序。
+3. [優化] 使用者介面：
+   - 新增快捷鍵：Ctrl+O (開啟), Ctrl+D (清空), Ctrl+S (匯出)。
+   - 進度條顯示檔案大小。
+   - 表格支援像素級平滑滾動。
+   - 關閉程式時的安全確認機制。
+4. [修正] 系統穩定性：
+   - 修正編碼問題 (UTF-8 BOM)。
+   - 增強 PDF 讀取錯誤處理與日誌記錄。
 
 [v2.0.3] - 2025/12/04
 1. [新增] 自然排序功能：
