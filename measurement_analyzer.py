@@ -54,7 +54,7 @@ except ImportError:
 # --- 設定常數 ---
 @dataclass
 class AppConfig:
-    VERSION: str = "v2.2.0"
+    VERSION: str = "v2.2.1"
     TITLE: str = f"量測數據分析工具 (Pro版) {VERSION}"
     LOG_FILENAME: str = "measurement_analyzer.log"
     THEME_CONFIG_FILE: str = "theme_config.txt"
@@ -82,6 +82,8 @@ DISPLAY_COLUMNS = [
 
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+[v2.2.1] - 2025/12/04
+1. [新增] 趨勢圖支援滑鼠懸停 (Hover) 功能
 
 [v2.2.0] - 2025/12/04
 1. [重構] 代碼結構優化 (Phase 3)：
@@ -562,11 +564,16 @@ class DistributionPlotDialog(QDialog):
                     has_time = True
             except: pass
         
-        y_data = df_sorted[AppConfig.Columns.MEASURED]
-        x_data = range(1, len(y_data) + 1)
+        y_data = df_sorted[AppConfig.Columns.MEASURED].values
+        x_data = np.arange(1, len(y_data) + 1)
+        
+        # Prepare data for tooltip
+        filenames = df_sorted[AppConfig.Columns.FILE].values if AppConfig.Columns.FILE in df_sorted.columns else []
+        times = df_sorted[AppConfig.Columns.TIME].values if AppConfig.Columns.TIME in df_sorted.columns else []
         
         line_color = 'cyan' if self.theme == 'dark' else 'blue'
-        ax.plot(x_data, y_data, marker='o', linestyle='-', color=line_color, markersize=4, label='實測值')
+        line, = ax.plot(x_data, y_data, marker='o', linestyle='-', color=line_color, markersize=4, label='實測值')
+        
         ax.axhline(self.design_val, color='lime' if self.theme=='dark' else 'green', linestyle='-', alpha=0.5, label='設計值')
         ax.axhline(self.usl, color='red', linestyle='--', alpha=0.5, label='USL')
         ax.axhline(self.lsl, color='red', linestyle='--', alpha=0.5, label='LSL')
@@ -575,6 +582,52 @@ class DistributionPlotDialog(QDialog):
         ax.set_xlabel("時間順序" if has_time else "讀取順序")
         ax.legend()
         ax.grid(True, alpha=0.3)
+        
+        # --- Tooltip Implementation ---
+        annot = ax.annotate("", xy=(0,0), xytext=(10,10),textcoords="offset points",
+                            bbox=dict(boxstyle="round", fc="w", alpha=0.9),
+                            arrowprops=dict(arrowstyle="->"))
+        annot.set_visible(False)
+
+        def update_annot(ind):
+            x, y = line.get_data()
+            idx = ind["ind"][0]
+            annot.xy = (x[idx], y[idx])
+            
+            val = y_data[idx]
+            fname = filenames[idx] if len(filenames) > idx else "Unknown"
+            
+            time_str = ""
+            if len(times) > idx:
+                t = times[idx]
+                if pd.notnull(t):
+                    try:
+                        time_str = pd.to_datetime(t).strftime("%Y/%m/%d %H:%M:%S")
+                    except: pass
+            
+            # Format text
+            text = f"File: {fname}\nValue: {val:.4f}"
+            if time_str:
+                text += f"\nTime: {time_str}"
+                
+            annot.set_text(text)
+
+        def hover(event):
+            vis = annot.get_visible()
+            if event.inaxes == ax:
+                cont, ind = line.contains(event)
+                if cont:
+                    update_annot(ind)
+                    annot.set_visible(True)
+                    canvas.draw_idle()
+                else:
+                    if vis:
+                        annot.set_visible(False)
+                        canvas.draw_idle()
+
+        canvas.mpl_connect("motion_notify_event", hover)
+        # ------------------------------
+
         layout.addWidget(toolbar)
         layout.addWidget(canvas)
 
