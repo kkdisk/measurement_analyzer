@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 import sys
 import os
 import glob
@@ -13,9 +14,17 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QTableWidget, QTableWidgetItem, QHeaderView, 
                              QProgressBar, QMessageBox, QGroupBox, QCheckBox, QDialog,
-                             QTabWidget, QTextEdit, QSplitter, QFrame, QMenu, QInputDialog)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QBrush, QFont, QAction
+                             QTabWidget, QTextEdit, QSplitter, QFrame, QMenu, QInputDialog,
+                             QAbstractItemView)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
+from PyQt6.QtGui import QColor, QBrush, QFont, QAction, QKeySequence
+
+# Natsort
+try:
+    from natsort import index_natsorted, natsort_keygen, ns
+    HAS_NATSORT = True
+except ImportError:
+    HAS_NATSORT = False
 
 # Matplotlib imports
 import matplotlib
@@ -86,9 +95,12 @@ UPDATE_LOG = """
 
 # --- 初始化日誌 ---
 def setup_logging():
+    # Allow debug mode via environment variable
+    log_level = logging.DEBUG if os.getenv('ANALYZER_DEBUG') else logging.INFO
+    
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        level=log_level,
+        format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
         handlers=[
             logging.FileHandler(LOG_FILENAME, encoding='utf-8', mode='w'),
             logging.StreamHandler(sys.stdout)
@@ -97,6 +109,14 @@ def setup_logging():
     logging.getLogger("pdfminer").setLevel(logging.ERROR)
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
     
+    # Encoding Verification
+    try:
+        test_str = "測量數據"
+        assert len(test_str) == 4, "Encoding verification failed"
+        logging.info(f"編碼驗證成功: {test_str}")
+    except Exception as e:
+        logging.error(f"編碼驗證失敗: {e}")
+
     logging.info(f"應用程式啟動 - {APP_TITLE}")
 
 # --- [關鍵修正] 字型設定 (回歸 v1.7.1 策略) ---
@@ -152,10 +172,40 @@ def parse_keyence_date(date_str):
     except: return None
 
 # --- 自然排序輔助函式 ---
+# --- CPK 計算 ---
+def calculate_cpk(values, usl, lsl, min_samples=30):
+    """
+    計算 CPK, 添加樣本數檢查
+    Returns:
+        (cpk, reliability): CPK 值與可靠性標記
+        reliability: 'reliable' | 'small_sample' | 'invalid'
+    """
+    if len(values) < 2:
+        return np.nan, 'invalid'
+    
+    if abs(usl - lsl) < 1e-9:
+        return np.nan, 'invalid'
+    
+    mean_val = values.mean()
+    std = values.std(ddof=1)  # 使用樣本標準差
+    
+    if std < 1e-9:
+        return 999.0, 'invalid'  # 標記為不可靠 (std=0)
+    
+    cpu = (usl - mean_val) / (3 * std)
+    cpl = (mean_val - lsl) / (3 * std)
+    cpk = min(cpu, cpl)
+    
+    reliability = 'reliable'
+    if len(values) < min_samples:
+        reliability = 'small_sample'
+        
+    return cpk, reliability
+
+# --- 自然排序輔助函式 ---
 def natural_keys(text):
     """
-    將字串拆解成 (text, number, text, number...) 的 tuple 以進行自然排序。
-    例如: "Item 10" -> ('item ', 10, '')
+    Fallback for natural sorting if natsort is missing.
     """
     try:
         text = str(text)
@@ -199,8 +249,15 @@ class FileLoaderThread(QThread):
         words = page.extract_words(keep_blank_chars=True)
         if not words: return []
         
+        # Boundary check
+        width, height = page.width, page.height
+        valid_words = [w for w in words if 0 <= w['x0'] <= width and 0 <= w['top'] <= height]
+        
+        if not valid_words:
+            return []
+
         rows = {} 
-        for word in words:
+        for word in valid_words:
             top = word['top']
             found_row = None
             for y in rows:
@@ -276,8 +333,14 @@ class FileLoaderThread(QThread):
             else:
                 return None, None
 
+        except pdfplumber.PDFSyntaxError as e:
+            logging.error(f"PDF 格式錯誤 {filepath}: {e}")
+            return None, None
+        except PermissionError:
+            logging.error(f"無權限讀取 {filepath}")
+            return None, None
         except Exception as e:
-            logging.error(f"PDF Error {filepath}: {e}")
+            logging.error(f"PDF Error {filepath}: {e}\n{traceback.format_exc()}")
             return None, None
 
     def run(self):
@@ -286,7 +349,15 @@ class FileLoaderThread(QThread):
         for i, filepath in enumerate(self.file_paths):
             if not self._is_running: break
             filename = os.path.basename(filepath)
-            self.progress_updated.emit(i + 1, f"處理中: {filename}")
+            
+            # Get file size
+            try:
+                size_kb = os.path.getsize(filepath) / 1024
+                size_str = f"{size_kb:.1f}KB"
+            except:
+                size_str = "Unknown"
+                
+            self.progress_updated.emit(i + 1, f"處理中: {filename} ({size_str})")
             
             df = None
             measure_time = None
@@ -348,7 +419,7 @@ class FileLoaderThread(QThread):
                         cols = [c for c in DISPLAY_COLUMNS if c in df.columns]
                         new_data_frames.append(df[cols])
             except Exception as e:
-                logging.error(f"Error {filename}: {e}")
+                logging.error(f"Error processing {filename}: {e}\n{traceback.format_exc()}")
 
         self.data_loaded.emit(new_data_frames, loaded_filenames)
 
@@ -358,8 +429,15 @@ class FileLoaderThread(QThread):
 # --- GUI Components ---
 class NumericTableWidgetItem(QTableWidgetItem):
     def __lt__(self, other):
+        if HAS_NATSORT:
+            try:
+                natsort_key = natsort_keygen(alg=ns.IGNORECASE)
+                return natsort_key(self.text()) < natsort_key(other.text())
+            except Exception:
+                pass
+        
         try:
-            # 嘗試使用自然排序比較
+            # Fallback
             return natural_keys(self.text()) < natural_keys(other.text())
         except Exception:
             return super().__lt__(other)
@@ -498,6 +576,21 @@ class MeasurementAnalyzerApp(QMainWindow):
         except Exception as e:
             logging.error(f"主題載入失敗: {e}")
 
+    def closeEvent(self, event):
+        """關閉前儲存當前狀態並停止線程"""
+        if self.loader_thread and self.loader_thread.isRunning():
+            reply = QMessageBox.question(
+                self, '確認', 
+                '數據正在載入中,確定要關閉嗎?',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            self.loader_thread.stop()
+            self.loader_thread.wait()
+        event.accept()
+
     def toggle_theme(self):
         if not HAS_THEME_SUPPORT:
             QMessageBox.information(self, "提示", "請先安裝 'pyqtdarktheme' 套件")
@@ -522,15 +615,18 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.btn_add = QPushButton("1. 加入資料夾")
         self.btn_add.clicked.connect(self.add_folder_data)
         self.btn_add.setMinimumHeight(40)
+        self.btn_add.setShortcut("Ctrl+O")
         
         self.btn_clear = QPushButton("清空資料")
         self.btn_clear.clicked.connect(self.clear_all_data)
         self.btn_clear.setStyleSheet("color: red;")
+        self.btn_clear.setShortcut("Ctrl+D")
         
         self.btn_export = QPushButton("匯出當前頁面資料")
         self.btn_export.clicked.connect(self.export_current_tab)
         self.btn_export.setMinimumHeight(40)
         self.btn_export.setEnabled(False)
+        self.btn_export.setShortcut("Ctrl+S")
         
         theme_label = "切換亮色" if self.current_theme == 'dark' else "切換深色"
         self.btn_theme = QPushButton(theme_label)
@@ -593,6 +689,10 @@ class MeasurementAnalyzerApp(QMainWindow):
         header = self.raw_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
+        
+        # Enable pixel scrolling
+        self.raw_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        
         layout.addWidget(self.raw_table)
 
     def setup_statistics_tab(self):
@@ -619,6 +719,10 @@ class MeasurementAnalyzerApp(QMainWindow):
         header = self.stats_table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(True)
+        
+        # Enable pixel scrolling
+        self.stats_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        
         layout.addWidget(self.stats_table)
 
     def show_version_info(self):
@@ -784,28 +888,32 @@ class MeasurementAnalyzerApp(QMainWindow):
             max_val = vals.max() if not vals.empty else 0
             min_val = vals.min() if not vals.empty else 0
             
-            cpk = np.nan
-            if len(vals) >= 2 and (usl != lsl):
-                std = vals.std()
-                if std == 0: cpk = 999.0
-                else:
-                    cpu = (usl - mean_val) / (3 * std)
-                    cpl = (mean_val - lsl) / (3 * std)
-                    cpk = min(cpu, cpl)
+            cpk, reliability = calculate_cpk(vals, usl, lsl)
             
             stats_list.append({
                 "No": no, "測量專案": name, "樣本數": count, 
                 "NG數": ng_count, "不良率(%)": fail_rate, "CPK": cpk,
+                "CPK_RELIABILITY": reliability,
                 "平均值": mean_val, "最大值": max_val, "最小值": min_val,
                 "_design": design, "_upper": upper, "_lower": lower
             })
             
         self.stats_data = pd.DataFrame(stats_list)
         
-        # [v2.0.3] 使用自然排序
-        self.stats_data['_sort_key'] = self.stats_data['No'].apply(natural_keys)
-        self.stats_data.sort_values(by=["不良率(%)", "_sort_key"], ascending=[False, True], inplace=True)
-        self.stats_data.drop(columns=['_sort_key'], inplace=True)
+        # [v2.0.3] 使用自然排序 (Natsort)
+        if HAS_NATSORT:
+            try:
+                sorted_idx = index_natsorted(self.stats_data['No'], alg=ns.IGNORECASE)
+                self.stats_data = self.stats_data.iloc[sorted_idx]
+            except Exception as e:
+                logging.warning(f"Natsort failed, using fallback: {e}")
+                self.stats_data['_sort_key'] = self.stats_data['No'].apply(natural_keys)
+                self.stats_data.sort_values(by="_sort_key", inplace=True)
+                self.stats_data.drop(columns=['_sort_key'], inplace=True)
+        else:
+            self.stats_data['_sort_key'] = self.stats_data['No'].apply(natural_keys)
+            self.stats_data.sort_values(by="_sort_key", inplace=True)
+            self.stats_data.drop(columns=['_sort_key'], inplace=True)
         
         total_items = len(self.stats_data)
         ng_items = len(self.stats_data[self.stats_data["NG數"] > 0])
@@ -830,17 +938,37 @@ class MeasurementAnalyzerApp(QMainWindow):
             if row['不良率(%)'] > 0: rate_item.setForeground(QColor('red'))
             self.stats_table.setItem(r, 4, rate_item)
             
+            # CPK Display Logic
             cpk_val = row['CPK']
-            cpk_text = "---" if pd.isna(cpk_val) else f"{cpk_val:.3f}"
-            cpk_item = NumericTableWidgetItem(cpk_text)
-            if not pd.isna(cpk_val):
-                if row['樣本數'] < 30:
-                    cpk_item.setForeground(QBrush(QColor('gray')))
-                    cpk_item.setText(f"{cpk_text} (少)")
-                else:
-                    if cpk_val < 1.0: cpk_item.setBackground(QBrush(QColor(255, 200, 200)))
-                    elif cpk_val < 1.33: cpk_item.setBackground(QBrush(QColor(255, 255, 200)))
-                    else: cpk_item.setBackground(QBrush(QColor(200, 255, 200)))
+            reliability = row.get('CPK_RELIABILITY', 'reliable')
+            sample_count = row['樣本數']
+            
+            cpk_text = ""
+            cpk_item = NumericTableWidgetItem("")
+            
+            if reliability == 'invalid':
+                cpk_text = "---"
+                cpk_item.setText(cpk_text)
+                cpk_item.setToolTip("無法計算 CPK (數據不足或規格異常)")
+            elif reliability == 'small_sample':
+                cpk_text = f"{cpk_val:.3f} ⚠"
+                cpk_item.setText(cpk_text)
+                cpk_item.setForeground(QBrush(QColor('darkorange'))) # Use orange for warning
+                cpk_item.setToolTip(
+                    "警告：樣本數少於 30，CPK 值僅供參考\n"
+                    f"當前樣本數：{sample_count}\n"
+                    "建議：累積更多數據後再評估製程能力"
+                )
+            else:
+                cpk_text = f"{cpk_val:.3f}"
+                cpk_item.setText(cpk_text)
+                cpk_item.setToolTip(f"CPK: {cpk_val:.3f} (樣本數：{sample_count})")
+                
+                # Color coding for reliable CPK
+                if cpk_val < 1.0: cpk_item.setBackground(QBrush(QColor(255, 200, 200)))
+                elif cpk_val < 1.33: cpk_item.setBackground(QBrush(QColor(255, 255, 200)))
+                else: cpk_item.setBackground(QBrush(QColor(200, 255, 200)))
+
             self.stats_table.setItem(r, 5, cpk_item)
             self.stats_table.setItem(r, 6, NumericTableWidgetItem(f"{row['平均值']:.4f}"))
             self.stats_table.setItem(r, 7, NumericTableWidgetItem(f"{row['最大值']:.4f}"))
