@@ -20,12 +20,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
 from PyQt6.QtGui import QColor, QBrush, QFont, QAction, QKeySequence
 
-# Natsort
-try:
-    from natsort import index_natsorted, natsort_keygen, ns
-    HAS_NATSORT = True
-except ImportError:
-    HAS_NATSORT = False
+
 
 # Matplotlib imports
 import matplotlib
@@ -48,6 +43,13 @@ try:
     HAS_THEME_SUPPORT = True
 except ImportError:
     HAS_THEME_SUPPORT = False
+
+# Natsort
+try:
+    from natsort import index_natsorted, natsort_keygen, ns
+    HAS_NATSORT = True
+except ImportError:
+    HAS_NATSORT = False
 
 # --- 設定常數 ---
 @dataclass
@@ -581,6 +583,8 @@ class MeasurementAnalyzerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         setup_logging()
+        if not HAS_NATSORT:
+            logging.warning("未安裝 natsort 套件，建議執行: pip install natsort")
         self.setWindowTitle(AppConfig.TITLE)
         self.setGeometry(100, 100, 1300, 850)
         self.all_data = pd.DataFrame()
@@ -810,6 +814,9 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.lbl_info.setText(message)
 
     def on_data_loaded(self, new_data_frames, loaded_filenames):
+        import time
+        start_time = time.time()
+        
         self.loaded_files.update(loaded_filenames)
         if new_data_frames:
             self.lbl_info.setText("正在合併資料...")
@@ -824,7 +831,10 @@ class MeasurementAnalyzerApp(QMainWindow):
             self.refresh_raw_table()
             self.calculate_and_refresh_stats()
             
-            msg = f"完成。本次加入 {len(new_data)} 筆數據。"
+            elapsed = time.time() - start_time
+            msg = f"完成。本次加入 {len(new_data)} 筆數據。耗時 {elapsed:.2f}秒"
+            logging.info(f"載入完成: {len(loaded_filenames)} 檔案, {len(new_data)} 筆, 耗時 {elapsed:.2f}秒")
+            
             self.lbl_info.setText(msg)
             QMessageBox.information(self, "完成", f"已加入 {len(loaded_filenames)} 個檔案。")
         else:
@@ -978,7 +988,7 @@ class MeasurementAnalyzerApp(QMainWindow):
             elif reliability == 'small_sample':
                 cpk_text = f"{cpk_val:.3f} ⚠"
                 cpk_item.setText(cpk_text)
-                cpk_item.setForeground(QBrush(QColor('darkorange'))) # Use orange for warning
+                cpk_item.setForeground(QColor('darkorange')) # Use orange for warning
                 cpk_item.setToolTip(
                     "警告：樣本數少於 30，CPK 值僅供參考\n"
                     f"當前樣本數：{sample_count}\n"
@@ -1040,7 +1050,7 @@ class MeasurementAnalyzerApp(QMainWindow):
             if self.stats_data.empty: return
             path, _ = QFileDialog.getSaveFileName(self, "匯出統計報表", "Statistics.csv", "CSV (*.csv)")
             if path:
-                export_df = self.stats_data.drop(columns=["_design", "_upper", "_lower", "_sort_key"], errors='ignore')
+                export_df = self.stats_data.drop(columns=["_design", "_upper", "_lower", "_sort_key", "CPK_RELIABILITY"], errors='ignore')
                 export_df.to_csv(path, index=False, encoding='utf-8-sig')
                 QMessageBox.information(self, "完成", "統計報表已匯出")
         elif curr_idx == 1: # Raw
