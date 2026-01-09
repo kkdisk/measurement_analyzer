@@ -1,4 +1,0 @@
-2026-01-09 19:25:52,126 - INFO - [measurement_analyzer.py:161] - 編碼驗證成功: 測量數據
-2026-01-09 19:25:52,127 - INFO - [measurement_analyzer.py:165] - 應用程式啟動 - 量測數據分析工具 (Pro版) v2.3.0
-2026-01-09 19:28:27,662 - INFO - [measurement_analyzer.py:1086] - 載入完成: 3 檔案, 1200 筆, 耗時 0.93秒
-2026-01-09 19:28:44,153 - INFO - [measurement_analyzer.py:1086] - 載入完成: 37 檔案, 14800 筆, 耗時 1.44秒
