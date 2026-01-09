@@ -3,7 +3,7 @@ import os
 import shutil
 
 # 設定主程式檔案名稱
-MAIN_SCRIPT = "measurement_analyzer.py"
+MAIN_SCRIPT = "main.py"
 # 設定產出的 EXE 名稱
 APP_NAME = "MeasurementAnalyzer"
 
