@@ -51,13 +51,21 @@ try:
 except ImportError:
     HAS_NATSORT = False
 
+# Scipy for statistical calculations
+try:
+    from scipy import stats as scipy_stats
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
+
 # --- 設定常數 ---
 @dataclass
 class AppConfig:
-    VERSION: str = "v2.2.1"
+    VERSION: str = "v2.3.0"
     TITLE: str = f"量測數據分析工具 (Pro版) {VERSION}"
     LOG_FILENAME: str = "measurement_analyzer.log"
     THEME_CONFIG_FILE: str = "theme_config.txt"
+    DEFAULT_TARGET_YIELD: float = 0.90  # 預設目標良率 90%
     
     class Columns:
         FILE = '檔案名稱'
@@ -82,6 +90,14 @@ DISPLAY_COLUMNS = [
 
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+[v2.3.0] - 2026/01/09
+1. [新增] 公差反推功能：
+   - 統計表新增「建議公差(90%)」欄位
+   - 雙擊測項可查看詳細公差建議分頁
+   - 支援自訂目標良率 (80%~99.73%)
+   - 智慧比較當前規格與建議公差
+2. [依賴] 新增 scipy 套件用於統計計算
+
 [v2.2.1] - 2025/12/04
 1. [新增] 趨勢圖支援滑鼠懸停 (Hover) 功能
 
@@ -230,6 +246,81 @@ def calculate_cpk(values, usl, lsl, min_samples=30):
         reliability = 'small_sample'
         
     return cpk, reliability
+
+# --- 公差反推計算 ---
+def calculate_tolerance_for_yield(values, design_val, target_yield=0.90):
+    """
+    根據目標良率反推所需公差
+    
+    Args:
+        values: 量測值 Series
+        design_val: 設計值
+        target_yield: 目標良率 (0.0 ~ 1.0)
+    
+    Returns:
+        dict: {
+            'symmetric_tol': 對稱公差值,
+            'upper_tol': 上限公差,
+            'lower_tol': 下限公差,
+            'reliability': 可靠性標記,
+            'mean': 平均值,
+            'std': 標準差,
+            'offset': 偏移量
+        }
+    """
+    result = {
+        'symmetric_tol': np.nan,
+        'upper_tol': np.nan,
+        'lower_tol': np.nan,
+        'reliability': 'invalid',
+        'mean': np.nan,
+        'std': np.nan,
+        'offset': np.nan
+    }
+    
+    if len(values) < 2:
+        return result
+    
+    mean_val = values.mean()
+    std_val = values.std(ddof=1)  # 使用樣本標準差
+    
+    if std_val < 1e-9:
+        result['reliability'] = 'zero_std'
+        result['mean'] = mean_val
+        result['std'] = 0
+        return result
+    
+    # 計算 Z 值（雙邊）
+    tail_prob = (1 - target_yield) / 2
+    
+    if HAS_SCIPY:
+        z_score = scipy_stats.norm.ppf(1 - tail_prob)
+    else:
+        # Fallback: 使用常見 Z 值近似
+        z_table = {0.90: 1.645, 0.95: 1.96, 0.99: 2.576, 0.9973: 3.0}
+        z_score = z_table.get(target_yield, 1.645)
+    
+    # 計算偏移量（平均值與設計值的差距）
+    offset = mean_val - design_val
+    
+    # 對稱公差 = Z × σ + |偏移量|
+    symmetric_tol = z_score * std_val + abs(offset)
+    
+    # 非對稱公差計算
+    # 上限 = Z × σ + 偏移量（若平均偏高，上限需更大）
+    # 下限 = -(Z × σ - 偏移量)
+    upper_tol = z_score * std_val + offset
+    lower_tol = -(z_score * std_val - offset)
+    
+    result['symmetric_tol'] = symmetric_tol
+    result['upper_tol'] = upper_tol
+    result['lower_tol'] = lower_tol
+    result['mean'] = mean_val
+    result['std'] = std_val
+    result['offset'] = offset
+    result['reliability'] = 'reliable' if len(values) >= 30 else 'small_sample'
+    
+    return result
 
 # --- 自然排序輔助函式 ---
 def natural_keys(text):
@@ -490,7 +581,8 @@ class DistributionPlotDialog(QDialog):
     def __init__(self, item_name, df_item, design_val, upper_tol, lower_tol, parent=None, theme='light'):
         super().__init__(parent)
         self.setWindowTitle(f"詳細分析: {item_name}")
-        self.setGeometry(100, 100, 900, 600)
+        self.setGeometry(100, 100, 950, 650)
+        self.item_name = item_name
         self.df_item = df_item
         self.design_val = design_val
         self.upper_tol = upper_tol
@@ -521,9 +613,114 @@ class DistributionPlotDialog(QDialog):
         self.plot_trend(self.tab_trend)
         tabs.addTab(self.tab_trend, "趨勢圖")
         
+        # [v2.3.0] 新增公差建議分頁
+        self.tab_tolerance = QWidget()
+        self.setup_tolerance_tab(self.tab_tolerance)
+        tabs.addTab(self.tab_tolerance, "📐 公差建議")
+        
         btn = QPushButton("關閉")
         btn.clicked.connect(self.close)
         layout.addWidget(btn)
+    
+    def setup_tolerance_tab(self, parent_widget):
+        """設定公差建議分頁"""
+        layout = QVBoxLayout(parent_widget)
+        
+        # 目標良率選擇區
+        yield_group = QGroupBox("目標良率設定")
+        yield_layout = QHBoxLayout()
+        
+        yield_layout.addWidget(QLabel("目標良率："))
+        
+        from PyQt6.QtWidgets import QComboBox, QSpinBox
+        self.yield_combo = QComboBox()
+        self.yield_combo.addItems(["80%", "85%", "90%", "95%", "99%", "99.73% (3σ)"])
+        self.yield_combo.setCurrentIndex(2)  # 預設 90%
+        self.yield_combo.currentIndexChanged.connect(self.update_tolerance_display)
+        yield_layout.addWidget(self.yield_combo)
+        
+        yield_layout.addStretch()
+        yield_group.setLayout(yield_layout)
+        layout.addWidget(yield_group)
+        
+        # 結果顯示區
+        result_group = QGroupBox("計算結果")
+        result_layout = QVBoxLayout()
+        
+        self.tol_result_text = QTextEdit()
+        self.tol_result_text.setReadOnly(True)
+        self.tol_result_text.setMinimumHeight(300)
+        result_layout.addWidget(self.tol_result_text)
+        
+        result_group.setLayout(result_layout)
+        layout.addWidget(result_group)
+        
+        # 初始計算
+        self.update_tolerance_display()
+    
+    def update_tolerance_display(self):
+        """更新公差計算結果顯示"""
+        yield_map = {0: 0.80, 1: 0.85, 2: 0.90, 3: 0.95, 4: 0.99, 5: 0.9973}
+        target_yield = yield_map.get(self.yield_combo.currentIndex(), 0.90)
+        
+        vals = pd.to_numeric(self.df_item[AppConfig.Columns.MEASURED], errors='coerce').dropna()
+        result = calculate_tolerance_for_yield(vals, self.design_val, target_yield)
+        
+        # 格式化輸出
+        lines = []
+        lines.append(f"═══════════════════════════════════════")
+        lines.append(f"  測量專案：{self.item_name}")
+        lines.append(f"  目標良率：{target_yield * 100:.2f}%")
+        lines.append(f"═══════════════════════════════════════")
+        lines.append("")
+        
+        if result['reliability'] == 'invalid':
+            lines.append("❌ 無法計算：數據不足 (需至少 2 個樣本)")
+        elif result['reliability'] == 'zero_std':
+            lines.append("❌ 無法計算：標準差為零 (所有數據相同)")
+        else:
+            lines.append("📊 【數據統計】")
+            lines.append(f"   樣本數：{len(vals)}")
+            lines.append(f"   平均值 (μ)：{result['mean']:.4f}")
+            lines.append(f"   標準差 (σ)：{result['std']:.4f}")
+            lines.append(f"   設計值：{self.design_val:.4f}")
+            lines.append(f"   製程偏移：{result['offset']:+.4f}")
+            lines.append("")
+            
+            lines.append("📐 【建議公差】")
+            lines.append(f"   ✅ 對稱公差：±{result['symmetric_tol']:.4f}")
+            lines.append("")
+            lines.append(f"   📈 非對稱建議：")
+            lines.append(f"      上限公差：+{result['upper_tol']:.4f}")
+            lines.append(f"      下限公差：{result['lower_tol']:.4f}")
+            lines.append("")
+            
+            lines.append("📋 【與當前規格比較】")
+            lines.append(f"   當前上限：+{self.upper_tol:.4f}")
+            lines.append(f"   當前下限：{self.lower_tol:.4f}")
+            
+            current_max_tol = max(abs(self.upper_tol), abs(self.lower_tol))
+            if current_max_tol > 0:
+                ratio = result['symmetric_tol'] / current_max_tol
+                if ratio > 1.2:
+                    lines.append("")
+                    lines.append(f"   ⚠️ 警告：要達到 {target_yield*100:.0f}% 良率，")
+                    lines.append(f"      建議公差比當前規格大 {(ratio-1)*100:.1f}%")
+                    lines.append(f"      建議放寬規格或改善製程")
+                elif ratio < 0.8:
+                    lines.append("")
+                    lines.append(f"   ✅ 良好：當前規格充裕，")
+                    lines.append(f"      實際只需 {ratio*100:.1f}% 即可達標")
+                else:
+                    lines.append("")
+                    lines.append(f"   ℹ️ 規格適中 (比例：{ratio*100:.1f}%)")
+            
+            if result['reliability'] == 'small_sample':
+                lines.append("")
+                lines.append("⚠️ 注意：樣本數少於 30，結果僅供參考")
+                lines.append("   建議累積更多數據後再做決策")
+        
+        self.tol_result_text.setPlainText("\n".join(lines))
 
     def plot_histogram(self, parent_widget):
         layout = QVBoxLayout(parent_widget)
@@ -789,7 +986,7 @@ class MeasurementAnalyzerApp(QMainWindow):
         layout.addWidget(lbl_hint)
 
         self.stats_table = QTableWidget()
-        cols = ["No", "測量專案", "樣本數", "NG數", "不良率(%)", "CPK", "平均值", "最大值", "最小值"]
+        cols = ["No", "測量專案", "樣本數", "NG數", "不良率(%)", "CPK", "建議公差(90%)", "平均值", "最大值", "最小值"]
         self.stats_table.setColumnCount(len(cols))
         self.stats_table.setHorizontalHeaderLabels(cols)
         self.stats_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -978,10 +1175,18 @@ class MeasurementAnalyzerApp(QMainWindow):
             
             cpk, reliability = calculate_cpk(vals, usl, lsl)
             
+            # [v2.3.0] 計算建議公差
+            tol_result = calculate_tolerance_for_yield(vals, design, AppConfig.DEFAULT_TARGET_YIELD)
+            
             stats_list.append({
                 "No": no, "測量專案": name, "樣本數": count, 
                 "NG數": ng_count, "不良率(%)": fail_rate, "CPK": cpk,
                 "CPK_RELIABILITY": reliability,
+                "建議公差": tol_result['symmetric_tol'],
+                "TOL_RELIABILITY": tol_result['reliability'],
+                "TOL_UPPER": tol_result['upper_tol'],
+                "TOL_LOWER": tol_result['lower_tol'],
+                "TOL_OFFSET": tol_result['offset'],
                 "平均值": mean_val, "最大值": max_val, "最小值": min_val,
                 "_design": design, "_upper": upper, "_lower": lower
             })
@@ -1058,9 +1263,59 @@ class MeasurementAnalyzerApp(QMainWindow):
                 else: cpk_item.setBackground(QBrush(QColor(200, 255, 200)))
 
             self.stats_table.setItem(r, 5, cpk_item)
-            self.stats_table.setItem(r, 6, NumericTableWidgetItem(f"{row['平均值']:.4f}"))
-            self.stats_table.setItem(r, 7, NumericTableWidgetItem(f"{row['最大值']:.4f}"))
-            self.stats_table.setItem(r, 8, NumericTableWidgetItem(f"{row['最小值']:.4f}"))
+            
+            # [v2.3.0] 建議公差 Display Logic
+            tol_val = row['建議公差']
+            tol_reliability = row.get('TOL_RELIABILITY', 'invalid')
+            tol_upper = row.get('TOL_UPPER', np.nan)
+            tol_lower = row.get('TOL_LOWER', np.nan)
+            tol_offset = row.get('TOL_OFFSET', np.nan)
+            current_upper = row.get('_upper', 0)
+            current_lower = row.get('_lower', 0)
+            
+            tol_item = NumericTableWidgetItem("")
+            
+            if tol_reliability == 'invalid' or tol_reliability == 'zero_std':
+                tol_item.setText("---")
+                tol_item.setToolTip("無法計算 (數據不足或標準差為零)")
+            else:
+                tol_text = f"±{tol_val:.4f}"
+                if tol_reliability == 'small_sample':
+                    tol_text += " ⚠"
+                    tol_item.setForeground(QColor('darkorange'))
+                
+                tol_item.setText(tol_text)
+                
+                # 詳細 Tooltip
+                tooltip_lines = [
+                    f"【達成 90% 良率所需公差】",
+                    f"對稱公差：±{tol_val:.4f}",
+                    f"",
+                    f"📊 非對稱建議：",
+                    f"  上限：+{tol_upper:.4f}",
+                    f"  下限：{tol_lower:.4f}",
+                    f"",
+                    f"📐 當前設定：",
+                    f"  上限：+{current_upper:.4f}",
+                    f"  下限：{current_lower:.4f}",
+                    f"",
+                    f"📈 製程偏移：{tol_offset:+.4f}" if not np.isnan(tol_offset) else ""
+                ]
+                tol_item.setToolTip("\n".join([l for l in tooltip_lines if l]))
+                
+                # 顏色標記：與當前規格比較
+                if not np.isnan(tol_val):
+                    current_tol = max(abs(current_upper), abs(current_lower))
+                    if current_tol > 0:
+                        if tol_val > current_tol * 1.2:  # 建議公差比當前大 20%
+                            tol_item.setBackground(QBrush(QColor(255, 220, 220)))  # 淺紅：規格偏緊
+                        elif tol_val < current_tol * 0.8:  # 建議公差比當前小 20%
+                            tol_item.setBackground(QBrush(QColor(220, 255, 220)))  # 淺綠：規格充裕
+            
+            self.stats_table.setItem(r, 6, tol_item)
+            self.stats_table.setItem(r, 7, NumericTableWidgetItem(f"{row['平均值']:.4f}"))
+            self.stats_table.setItem(r, 8, NumericTableWidgetItem(f"{row['最大值']:.4f}"))
+            self.stats_table.setItem(r, 9, NumericTableWidgetItem(f"{row['最小值']:.4f}"))
         self.stats_table.setSortingEnabled(True)
         self.lbl_info.setText("統計數據更新完成。")
 
