@@ -1,3 +1,8 @@
+import sys
+
+# 增加遞迴深度限制，解決打包複雜套件 (如 scipy/pandas) 時的 RecursionError
+sys.setrecursionlimit(5000)
+
 import PyInstaller.__main__
 import os
 import shutil
@@ -36,10 +41,13 @@ def build_exe():
         
         # --- 排除不必要的模組 ---
         '--exclude-module=tkinter',
-        '--exclude-module=scipy',
+        # '--exclude-module=scipy', # 保留 scipy
         '--exclude-module=IPython',
         '--exclude-module=notebook',
         '--exclude-module=dask',
+        '--exclude-module=torch',
+        '--exclude-module=tensorflow',
+        '--exclude-module=tensorboard',
         
         # 排除其他 Qt 綁定以避免衝突
         '--exclude-module=PyQt5',

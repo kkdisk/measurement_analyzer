@@ -13,10 +13,9 @@ from datetime import datetime
 
 # PyQt6 imports
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QLabel, QFileDialog, 
-                             QTableWidget, QTableWidgetItem, QHeaderView, 
-                             QProgressBar, QMessageBox, QGroupBox, QCheckBox, 
-                             QInputDialog, QAbstractItemView)
+                             QHeaderView, QProgressBar, QMessageBox, QGroupBox, QCheckBox, 
+                             QInputDialog, QAbstractItemView, QTabWidget, QHBoxLayout, 
+                             QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QBrush
 
