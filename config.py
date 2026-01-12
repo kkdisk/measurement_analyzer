@@ -9,7 +9,7 @@ from dataclasses import dataclass
 @dataclass
 class AppConfig:
     """應用程式設定"""
-    VERSION: str = "v2.5.0"
+    VERSION: str = "v2.5.1"
     TITLE: str = f"量測數據分析工具 (Pro版) {VERSION}"
     LOG_FILENAME: str = "measurement_analyzer.log"
     THEME_CONFIG_FILE: str = "theme_config.txt"
@@ -52,6 +52,12 @@ DISPLAY_COLUMNS = [
 # 版本更新紀錄
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+[v2.5.1] - 2026/01/12
+1. [新增] 2D 散佈圖功能增強：
+   - 支援手動調整徑向公差並即時更新判定。
+   - 新增「轉為內切圓 (÷√2)」按鈕，方便切換公差標準 (Way A/B)。
+2. [修正] 修復 2D 散佈圖開啟時的變數未定義錯誤。
+
 [v2.5.0] - 2026/01/12
 1. [新增] 2D 測量進階功能：
    - 2D 散佈圖 (XY Scatter Plot)、直方圖、趨勢圖

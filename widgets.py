@@ -9,7 +9,7 @@ import numpy as np
 
 # PyQt6 imports
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
-                             QDialog, QTabWidget, QTextEdit, QTableWidgetItem, QGroupBox, QComboBox)
+                             QDialog, QTabWidget, QTextEdit, QTableWidgetItem, QGroupBox, QComboBox, QDoubleSpinBox)
 from PyQt6.QtGui import QColor, QBrush, QFont
 from PyQt6.QtCore import Qt
 
@@ -407,13 +407,74 @@ class XYScatterPlotDialog(QDialog):
         layout.addWidget(btn)
     
     def plot_scatter(self, parent_widget):
-        """繪製 2D 散佈圖"""
+        """繪製 2D 散佈圖 (含手動公差設定)"""
         layout = QVBoxLayout(parent_widget)
         
-        fig = Figure(figsize=(7, 7), dpi=100)
-        canvas = FigureCanvas(fig)
-        toolbar = NavigationToolbar(canvas, parent_widget)
-        ax = fig.add_subplot(111)
+        # [v2.5.0] 公差控制區
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.addWidget(QLabel("徑向公差 (mm):"))
+        self.spin_tol = QDoubleSpinBox()
+        self.spin_tol.setRange(0.0001, 100.0)
+        self.spin_tol.setDecimals(4)
+        self.spin_tol.setSingleStep(0.005)
+        # 設定初始值 (若為 nan 則設為 0)
+        init_tol = self.radial_tolerance if not np.isnan(self.radial_tolerance) else 0.05
+        self.spin_tol.setValue(init_tol)
+        
+        btn_update = QPushButton("更新判定")
+        btn_update.clicked.connect(self.update_scatter_plot)
+        
+        # [v2.5.0] 快速轉換按鈕
+        btn_convert = QPushButton("轉為內切圓 (÷√2)")
+        btn_convert.setToolTip("將公差除以 1.414 (從矩形對角轉為單軸標準)")
+        btn_convert.clicked.connect(self.convert_tolerance_to_inscribed)
+        
+        ctrl_layout.addWidget(self.spin_tol)
+        ctrl_layout.addWidget(btn_convert)
+        ctrl_layout.addWidget(btn_update)
+        ctrl_layout.addStretch()
+        layout.addLayout(ctrl_layout)
+        
+        # 繪圖區
+        self.fig_scatter = Figure(figsize=(7, 7), dpi=100)
+        self.canvas_scatter = FigureCanvas(self.fig_scatter)
+        self.toolbar_scatter = NavigationToolbar(self.canvas_scatter, parent_widget)
+        
+        layout.addWidget(self.toolbar_scatter)
+        layout.addWidget(self.canvas_scatter)
+        
+        self.draw_scatter()
+
+    def convert_tolerance_to_inscribed(self):
+        """將目前公差值除以 sqrt(2)"""
+        current_val = self.spin_tol.value()
+        new_val = current_val / np.sqrt(2)
+        self.spin_tol.setValue(new_val)
+        self.update_scatter_plot()
+
+    def update_scatter_plot(self):
+        """更新公差並重繪"""
+        new_tol = self.spin_tol.value()
+        self.radial_tolerance = new_tol
+        
+        # 重新計算 NG 狀態
+        # 假設 xy_data 中 dx, dy 單位已是 mm (或與公差一致)
+        ng_count = 0
+        for d in self.xy_data:
+            r = np.sqrt(d['dx']**2 + d['dy']**2)
+            is_ng = r > new_tol
+            d['is_ng'] = is_ng
+            if is_ng: ng_count += 1
+            
+        self.draw_scatter()
+        
+        # [Optional] 更新標題或其他資訊已反映新的 NG 數
+        # self.setWindowTitle(f"2D 位置分佈圖: {self.group_name} (NG: {ng_count})")
+
+    def draw_scatter(self):
+        """執行繪圖邏輯"""
+        self.fig_scatter.clear()
+        ax = self.fig_scatter.add_subplot(111)
         
         # 設定等比例軸
         ax.set_aspect('equal', adjustable='box')
@@ -434,10 +495,15 @@ class XYScatterPlotDialog(QDialog):
         dx_ng = [d['dx'] for d in self.xy_data if d.get('is_ng', False)]
         dy_ng = [d['dy'] for d in self.xy_data if d.get('is_ng', False)]
         
+        # 計算新的比例
+        total = len(self.xy_data)
+        ok_ratio = len(dx_ok) / total * 100 if total > 0 else 0
+        ng_ratio = len(dx_ng) / total * 100 if total > 0 else 0
+        
         if dx_ok:
-            ax.scatter(dx_ok, dy_ok, c='blue', s=50, alpha=0.7, label=f'合格 ({len(dx_ok)})', zorder=5)
+            ax.scatter(dx_ok, dy_ok, c='blue', s=50, alpha=0.7, label=f'合格: {len(dx_ok)} ({ok_ratio:.1f}%)', zorder=5)
         if dx_ng:
-            ax.scatter(dx_ng, dy_ng, c='red', s=80, alpha=0.9, marker='x', label=f'超標 ({len(dx_ng)})', zorder=6)
+            ax.scatter(dx_ng, dy_ng, c='red', s=80, alpha=0.9, marker='x', label=f'超標: {len(dx_ng)} ({ng_ratio:.1f}%)', zorder=6)
         
         # 繪製原點標記
         ax.scatter([0], [0], c='green', s=100, marker='+', linewidths=2, label='設計中心', zorder=7)
@@ -457,12 +523,12 @@ class XYScatterPlotDialog(QDialog):
         
         ax.set_xlabel('X 偏差 (ΔX)')
         ax.set_ylabel('Y 偏差 (ΔY)')
+        # self.group_name 可能包含 " (2D合併)"，視情況簡化
         ax.set_title(f'{self.group_name} - XY 位置分佈')
         ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
         
-        layout.addWidget(toolbar)
-        layout.addWidget(canvas)
+        self.canvas_scatter.draw()
     
     def plot_radial_histogram(self, parent_widget):
         """[v2.5.0] 繪製徑向偏差直方圖"""
