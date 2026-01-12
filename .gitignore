@@ -27,3 +27,6 @@ venv.bak/
 
 # Project specific
 theme_config.txt
+temp/
+dist_nuitka/
+

@@ -25,6 +25,7 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as Navigation
 from config import AppConfig, UPDATE_LOG
 from parsers import natural_keys
 from statistics import calculate_tolerance_for_yield
+from xy_analyzer import calculate_2d_suggested_tolerance
 
 # Natsort
 try:
@@ -345,3 +346,528 @@ class DistributionPlotDialog(QDialog):
 
         layout.addWidget(toolbar)
         layout.addWidget(canvas)
+
+
+class XYScatterPlotDialog(QDialog):
+    """[v2.5.0] 2D XY 散佈圖對話框"""
+    
+    def __init__(self, group_name, xy_data, radial_tolerance, parent=None, theme='light'):
+        """
+        Args:
+            group_name: 座標組名稱 (如 'NO.1_XY座標')
+            xy_data: List of dicts with keys: 'dx', 'dy', 'file', 'is_ng'
+            radial_tolerance: 徑向公差
+            parent: 父視窗
+            theme: 主題 ('light' or 'dark')
+        """
+        super().__init__(parent)
+        self.setWindowTitle(f"2D 位置分佈圖: {group_name}")
+        self.setGeometry(100, 100, 800, 700)
+        self.group_name = group_name
+        self.xy_data = xy_data
+        self.radial_tolerance = radial_tolerance
+        self.theme = theme
+        
+        # 設定 Style
+        if self.theme == 'dark':
+            plt.style.use('dark_background')
+        else:
+            plt.style.use('default')
+        set_chinese_font()
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+        
+        # 散佈圖頁籤
+        self.tab_scatter = QWidget()
+        self.plot_scatter(self.tab_scatter)
+        tabs.addTab(self.tab_scatter, "📍 XY 分佈圖")
+        
+        # [v2.5.0] 徑向偏差直方圖頁籤
+        self.tab_hist = QWidget()
+        self.plot_radial_histogram(self.tab_hist)
+        tabs.addTab(self.tab_hist, "📊 分佈直方圖")
+        
+        # [v2.5.0] 趨勢圖頁籤
+        self.tab_trend = QWidget()
+        self.plot_radial_trend(self.tab_trend)
+        tabs.addTab(self.tab_trend, "📈 趨勢圖")
+        
+        # 統計摘要頁籤
+        self.tab_stats = QWidget()
+        self.setup_stats_tab(self.tab_stats)
+        tabs.addTab(self.tab_stats, "📋 統計摘要")
+        
+        btn = QPushButton("關閉")
+        btn.clicked.connect(self.close)
+        layout.addWidget(btn)
+    
+    def plot_scatter(self, parent_widget):
+        """繪製 2D 散佈圖"""
+        layout = QVBoxLayout(parent_widget)
+        
+        fig = Figure(figsize=(7, 7), dpi=100)
+        canvas = FigureCanvas(fig)
+        toolbar = NavigationToolbar(canvas, parent_widget)
+        ax = fig.add_subplot(111)
+        
+        # 設定等比例軸
+        ax.set_aspect('equal', adjustable='box')
+        
+        # 繪製公差圓
+        tol = self.radial_tolerance
+        if tol > 0:
+            # 公差圓（綠色填充）
+            circle = plt.Circle((0, 0), tol, color='lightgreen', alpha=0.3, label=f'公差圓 (r={tol:.4f})')
+            ax.add_patch(circle)
+            # 公差圓邊界
+            circle_edge = plt.Circle((0, 0), tol, color='green', fill=False, linewidth=2)
+            ax.add_patch(circle_edge)
+        
+        # 繪製數據點
+        dx_ok = [d['dx'] for d in self.xy_data if not d.get('is_ng', False)]
+        dy_ok = [d['dy'] for d in self.xy_data if not d.get('is_ng', False)]
+        dx_ng = [d['dx'] for d in self.xy_data if d.get('is_ng', False)]
+        dy_ng = [d['dy'] for d in self.xy_data if d.get('is_ng', False)]
+        
+        if dx_ok:
+            ax.scatter(dx_ok, dy_ok, c='blue', s=50, alpha=0.7, label=f'合格 ({len(dx_ok)})', zorder=5)
+        if dx_ng:
+            ax.scatter(dx_ng, dy_ng, c='red', s=80, alpha=0.9, marker='x', label=f'超標 ({len(dx_ng)})', zorder=6)
+        
+        # 繪製原點標記
+        ax.scatter([0], [0], c='green', s=100, marker='+', linewidths=2, label='設計中心', zorder=7)
+        
+        # 繪製座標軸
+        ax.axhline(0, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
+        ax.axvline(0, color='gray', linestyle='--', linewidth=0.5, alpha=0.5)
+        
+        # 設定範圍（確保能看到所有點和公差圓）
+        all_dx = [d['dx'] for d in self.xy_data]
+        all_dy = [d['dy'] for d in self.xy_data]
+        if all_dx and all_dy:
+            max_range = max(max(abs(min(all_dx)), abs(max(all_dx)), tol),
+                           max(abs(min(all_dy)), abs(max(all_dy)), tol)) * 1.3
+            ax.set_xlim(-max_range, max_range)
+            ax.set_ylim(-max_range, max_range)
+        
+        ax.set_xlabel('X 偏差 (ΔX)')
+        ax.set_ylabel('Y 偏差 (ΔY)')
+        ax.set_title(f'{self.group_name} - XY 位置分佈')
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+    
+    def plot_radial_histogram(self, parent_widget):
+        """[v2.5.0] 繪製徑向偏差直方圖"""
+        layout = QVBoxLayout(parent_widget)
+        
+        fig = Figure(figsize=(8, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+        toolbar = NavigationToolbar(canvas, parent_widget)
+        ax = fig.add_subplot(111)
+        
+        # 計算徑向偏差
+        radial_vals = np.array([np.sqrt(d['dx']**2 + d['dy']**2) for d in self.xy_data])
+        
+        if len(radial_vals) > 0:
+            color = 'cyan' if self.theme == 'dark' else 'skyblue'
+            edgecolor = 'white' if self.theme == 'dark' else 'black'
+            ax.hist(radial_vals, bins=15, color=color, edgecolor=edgecolor, alpha=0.7, label='徑向偏差')
+            
+            # 繪製公差線
+            if self.radial_tolerance > 0:
+                ax.axvline(self.radial_tolerance, color='red', linestyle='--', linewidth=2, 
+                          label=f'徑向公差 ({self.radial_tolerance:.4f})')
+            
+            # 繪製平均線
+            ax.axvline(radial_vals.mean(), color='lime' if self.theme=='dark' else 'green', 
+                      linestyle='-', linewidth=2, label=f'平均 ({radial_vals.mean():.4f})')
+            
+            ax.set_title("徑向偏差分佈圖")
+            ax.set_xlabel("徑向偏差")
+            ax.set_ylabel("次數")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+        else:
+            ax.text(0.5, 0.5, "無有效數據", ha='center', va='center')
+        
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+    
+    def plot_radial_trend(self, parent_widget):
+        """[v2.5.0] 繪製徑向偏差趨勢圖"""
+        layout = QVBoxLayout(parent_widget)
+        
+        fig = Figure(figsize=(8, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+        toolbar = NavigationToolbar(canvas, parent_widget)
+        ax = fig.add_subplot(111)
+        
+        # 計算徑向偏差
+        radial_vals = np.array([np.sqrt(d['dx']**2 + d['dy']**2) for d in self.xy_data])
+        filenames = [d.get('file', '') for d in self.xy_data]
+        x_data = np.arange(1, len(radial_vals) + 1)
+        
+        if len(radial_vals) > 0:
+            line_color = 'cyan' if self.theme == 'dark' else 'blue'
+            line, = ax.plot(x_data, radial_vals, marker='o', linestyle='-', color=line_color, 
+                           markersize=4, label='徑向偏差')
+            
+            # 繪製公差線
+            if self.radial_tolerance > 0:
+                ax.axhline(self.radial_tolerance, color='red', linestyle='--', alpha=0.5, 
+                          label=f'徑向公差 ({self.radial_tolerance:.4f})')
+            
+            # 繪製平均線
+            ax.axhline(radial_vals.mean(), color='lime' if self.theme=='dark' else 'green', 
+                      linestyle='-', alpha=0.5, label=f'平均 ({radial_vals.mean():.4f})')
+            
+            ax.set_title("徑向偏差趨勢圖")
+            ax.set_xlabel("樣本序號")
+            ax.set_ylabel("徑向偏差")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            # Tooltip
+            annot = ax.annotate("", xy=(0,0), xytext=(10,10), textcoords="offset points",
+                               bbox=dict(boxstyle="round", fc="w", alpha=0.9),
+                               arrowprops=dict(arrowstyle="->"))
+            annot.set_visible(False)
+            
+            def update_annot(ind):
+                idx = ind["ind"][0]
+                annot.xy = (x_data[idx], radial_vals[idx])
+                fname = filenames[idx] if idx < len(filenames) else "Unknown"
+                text = f"File: {fname}\nRadial: {radial_vals[idx]:.4f}"
+                annot.set_text(text)
+            
+            def hover(event):
+                vis = annot.get_visible()
+                if event.inaxes == ax:
+                    cont, ind = line.contains(event)
+                    if cont:
+                        update_annot(ind)
+                        annot.set_visible(True)
+                        canvas.draw_idle()
+                    else:
+                        if vis:
+                            annot.set_visible(False)
+                            canvas.draw_idle()
+            
+            canvas.mpl_connect("motion_notify_event", hover)
+        else:
+            ax.text(0.5, 0.5, "無有效數據", ha='center', va='center')
+        
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+
+    def setup_stats_tab(self, parent_widget):
+        """設定統計摘要頁籤"""
+        layout = QVBoxLayout(parent_widget)
+        
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        
+        # 計算統計
+        n = len(self.xy_data)
+        dx_vals = np.array([d['dx'] for d in self.xy_data])
+        dy_vals = np.array([d['dy'] for d in self.xy_data])
+        radial_vals = np.sqrt(dx_vals**2 + dy_vals**2)
+        ng_count = sum(1 for d in self.xy_data if d.get('is_ng', False))
+        
+        lines = []
+        lines.append("═══════════════════════════════════════")
+        lines.append(f"  2D 位置分析：{self.group_name}")
+        lines.append("═══════════════════════════════════════")
+        lines.append("")
+        lines.append("📊 【樣本統計】")
+        lines.append(f"   樣本數：{n}")
+        lines.append(f"   NG 數：{ng_count}")
+        lines.append(f"   不良率：{ng_count/n*100:.2f}%" if n > 0 else "   不良率：---")
+        lines.append("")
+        lines.append("📍 【X 軸偏差】")
+        lines.append(f"   平均：{dx_vals.mean():.4f}")
+        lines.append(f"   標準差：{dx_vals.std():.4f}")
+        lines.append(f"   範圍：{dx_vals.min():.4f} ~ {dx_vals.max():.4f}")
+        lines.append("")
+        lines.append("📍 【Y 軸偏差】")
+        lines.append(f"   平均：{dy_vals.mean():.4f}")
+        lines.append(f"   標準差：{dy_vals.std():.4f}")
+        lines.append(f"   範圍：{dy_vals.min():.4f} ~ {dy_vals.max():.4f}")
+        lines.append("")
+        lines.append("📐 【徑向偏差】")
+        lines.append(f"   平均：{radial_vals.mean():.4f}")
+        lines.append(f"   最大：{radial_vals.max():.4f}")
+        lines.append(f"   最小：{radial_vals.min():.4f}")
+        lines.append(f"   標準差：{radial_vals.std():.4f}")
+        lines.append("")
+        lines.append(f"   徑向公差：{self.radial_tolerance:.4f}")
+        
+        # 單側 CPK (CPU)
+        if n > 1 and radial_vals.std() > 0:
+            cpu = (self.radial_tolerance - radial_vals.mean()) / (3 * radial_vals.std())
+            lines.append("")
+            lines.append("📈 【2D CPK (CPU)】")
+            lines.append(f"   CPU = (USL - μ) / (3σ)")
+            lines.append(f"   CPU = ({self.radial_tolerance:.4f} - {radial_vals.mean():.4f}) / (3 × {radial_vals.std():.4f})")
+            lines.append(f"   CPU = {cpu:.3f}")
+            if cpu >= 1.33:
+                lines.append("   ✅ 製程能力優良 (CPU ≥ 1.33)")
+            elif cpu >= 1.0:
+                lines.append("   ⚠️ 製程能力尚可 (1.0 ≤ CPU < 1.33)")
+            else:
+                lines.append("   ❌ 製程能力不足 (CPU < 1.0)")
+        
+        # [v2.5.0] 2D 建議公差
+        sugg_result = calculate_2d_suggested_tolerance(radial_vals, target_yield=0.90)
+        sugg_tol = sugg_result.get('suggested_tol', np.nan)
+        
+        lines.append("")
+        lines.append("🛡️ 【建議公差】 (目標良率 90%, Rayleigh模型)")
+        if not np.isnan(sugg_tol):
+             lines.append(f"   建議徑向公差：{sugg_tol:.4f}")
+             if self.radial_tolerance > 0:
+                 ratio = sugg_tol / self.radial_tolerance
+                 if ratio > 1.0:
+                     lines.append(f"   ⚠️ 需放寬至當前規格的 {ratio*100:.1f}%")
+                 else:
+                     lines.append(f"   ✅ 當前規格充足 (只需 {ratio*100:.1f}%)")
+        else:
+             lines.append("   無法計算 (數據不足)")
+        
+        txt.setPlainText("\n".join(lines))
+        layout.addWidget(txt)
+
+
+class ArrayHeatmapDialog(QDialog):
+    """[v2.5.0] 陣列資料視覺化對話框 (熱力圖/條形圖)"""
+    
+    def __init__(self, group_name, array_data, parent=None, theme='light'):
+        """
+        Args:
+            group_name: 群組名稱 (如 'AA區平面度')
+            array_data: List of dicts with keys: 'index', 'value', 'file'
+            parent: 父視窗
+            theme: 主題 ('light' or 'dark')
+        """
+        super().__init__(parent)
+        self.setWindowTitle(f"陣列分析: {group_name}")
+        self.setGeometry(100, 100, 900, 600)
+        self.group_name = group_name
+        self.array_data = array_data
+        self.theme = theme
+        
+        # 設定 Style
+        if self.theme == 'dark':
+            plt.style.use('dark_background')
+        else:
+            plt.style.use('default')
+        set_chinese_font()
+        
+        self.init_ui()
+    
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+        
+        # 條形圖頁籤
+        self.tab_bar = QWidget()
+        self.plot_bar_chart(self.tab_bar)
+        tabs.addTab(self.tab_bar, "📊 條形圖")
+        
+        # [v2.5.0] 熱力圖頁籤
+        self.tab_heatmap = QWidget()
+        self.plot_heatmap_ui(self.tab_heatmap)
+        tabs.addTab(self.tab_heatmap, "🌡️ 2D 熱力圖")
+        
+        # 統計摘要頁籤
+        self.tab_stats = QWidget()
+        self.setup_stats_tab(self.tab_stats)
+        tabs.addTab(self.tab_stats, "📋 統計摘要")
+        
+        btn = QPushButton("關閉")
+        btn.clicked.connect(self.close)
+        layout.addWidget(btn)
+        
+    def plot_bar_chart(self, parent_widget):
+        """繪製數值條形圖"""
+        layout = QVBoxLayout(parent_widget)
+        
+        fig = Figure(figsize=(10, 6), dpi=100)
+        canvas = FigureCanvas(fig)
+        toolbar = NavigationToolbar(canvas, parent_widget)
+        ax = fig.add_subplot(111)
+        
+        # 準備數據
+        indices = [d['index'] for d in self.array_data]
+        values = [d['value'] for d in self.array_data]
+        
+        if len(values) > 0:
+            # 顏色映射
+            norm = plt.Normalize(min(values), max(values))
+            cmap = plt.cm.get_cmap('coolwarm')
+            colors = cmap(norm(values))
+            
+            bars = ax.bar(range(len(values)), values, color=colors, alpha=0.8)
+            ax.set_xticks(range(len(values)))
+            
+            # 若點數太多，簡化 X 軸標籤
+            if len(indices) > 30:
+                n = len(indices)
+                step = n // 20
+                ax.set_xticks(range(0, n, step))
+                ax.set_xticklabels([indices[i] for i in range(0, n, step)], rotation=45)
+            else:
+                ax.set_xticklabels(indices, rotation=45)
+            
+            # 標記 Max/Min
+            min_idx = np.argmin(values)
+            max_idx = np.argmax(values)
+            
+            ax.annotate(f'Min: {values[min_idx]:.3f}', 
+                        xy=(min_idx, values[min_idx]), 
+                        xytext=(0, -20), textcoords='offset points', ha='center',
+                        arrowprops=dict(arrowstyle="->", color='blue'))
+                        
+            ax.annotate(f'Max: {values[max_idx]:.3f}', 
+                        xy=(max_idx, values[max_idx]), 
+                        xytext=(0, 20), textcoords='offset points', ha='center',
+                        arrowprops=dict(arrowstyle="->", color='red'))
+            
+            ax.set_title(f"{self.group_name} - 各點平均值分佈")
+            ax.set_ylabel("數值")
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # Colorbar
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            fig.colorbar(sm, ax=ax, label='數值')
+            
+        else:
+            ax.text(0.5, 0.5, "無數據", ha='center', va='center')
+            
+        layout.addWidget(toolbar)
+        layout.addWidget(canvas)
+
+    def plot_heatmap_ui(self, parent_widget):
+        """建立熱力圖 UI"""
+        layout = QVBoxLayout(parent_widget)
+        
+        # 控制區
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.addWidget(QLabel("排列方式 (Rows x Cols):"))
+        
+        self.spin_rows = QComboBox()
+        self.spin_cols = QComboBox()
+        
+        # 自動猜測維度
+        N = len(self.array_data)
+        factors = []
+        for i in range(1, int(np.sqrt(N)) + 1):
+            if N % i == 0:
+                factors.append((i, N // i))
+        
+        # 預設邏輯 (優先 22x14, 14x22)
+        default_idx = 0
+        self.grid_options = []
+        
+        if N == 308:
+            self.grid_options.append((22, 14))
+            self.grid_options.append((14, 22))
+        
+        for r, c in factors:
+            if (r,c) not in self.grid_options: self.grid_options.append((r, c))
+            if (c,r) not in self.grid_options and r != c: self.grid_options.append((c, r))
+            
+        for r, c in self.grid_options:
+            self.spin_rows.addItem(f"{r} x {c}")
+            
+        self.spin_rows.currentIndexChanged.connect(self.update_heatmap)
+        
+        ctrl_layout.addWidget(self.spin_rows)
+        ctrl_layout.addStretch()
+        layout.addLayout(ctrl_layout)
+        
+        # 繪圖區
+        self.fig_hm = Figure(figsize=(8, 6), dpi=100)
+        self.canvas_hm = FigureCanvas(self.fig_hm)
+        self.toolbar_hm = NavigationToolbar(self.canvas_hm, parent_widget)
+        
+        layout.addWidget(self.toolbar_hm)
+        layout.addWidget(self.canvas_hm)
+        
+        # 初始繪製
+        self.update_heatmap()
+        
+    def update_heatmap(self):
+        """更新熱力圖"""
+        self.fig_hm.clear()
+        ax = self.fig_hm.add_subplot(111)
+        
+        idx = self.spin_rows.currentIndex()
+        if idx < 0 or idx >= len(self.grid_options):
+            return
+            
+        rows, cols = self.grid_options[idx]
+        
+        values = [d['value'] for d in self.array_data]
+        # 確保數據依照 index 排序 (由小到大)
+        # 假設 array_data 已經排序過
+        
+        try:
+            matrix = np.array(values).reshape(rows, cols)
+            
+            im = ax.imshow(matrix, cmap='coolwarm', interpolation='nearest') # 或 'bilinear'
+            
+            # Colorbar
+            self.fig_hm.colorbar(im, ax=ax)
+            
+            # 添加數值標籤 (如果格子夠少)
+            if len(values) < 100:
+                for i in range(rows):
+                    for j in range(cols):
+                        val = matrix[i, j]
+                        text = ax.text(j, i, f"{val:.1f}",
+                                       ha="center", va="center", color="w", fontsize=8)
+            
+            ax.set_title(f"熱力圖 ({rows}x{cols}) - 所有樣本平均值")
+            self.canvas_hm.draw()
+            
+        except Exception as e:
+            ax.text(0.5, 0.5, f"繪圖錯誤: {str(e)}", ha='center')
+            self.canvas_hm.draw()
+
+    def setup_stats_tab(self, parent_widget):
+        """設定統計摘要"""
+        layout = QVBoxLayout(parent_widget)
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        
+        values = np.array([d['value'] for d in self.array_data])
+        if len(values) > 0:
+            lines = []
+            lines.append(f"測量專案：{self.group_name}")
+            lines.append("══════════════════════════════")
+            lines.append(f"總點數：{len(values)}")
+            lines.append("")
+            lines.append(f"最大值 (Max)：{values.max():.4f}  (Index: {self.array_data[np.argmax(values)]['index']})")
+            lines.append(f"最小值 (Min)：{values.min():.4f}  (Index: {self.array_data[np.argmin(values)]['index']})")
+            lines.append(f"峰谷值 (P-V)：{values.max() - values.min():.4f}")
+            lines.append("")
+            lines.append(f"平均值 (Mean)：{values.mean():.4f}")
+            lines.append(f"標準差 (Std) ：{values.std(ddof=1):.4f}")
+            
+            txt.setPlainText("\n".join(lines))
+        else:
+            txt.setPlainText("無數據")
+            
+        layout.addWidget(txt)
+

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 @dataclass
 class AppConfig:
     """應用程式設定"""
-    VERSION: str = "v2.4.0"
+    VERSION: str = "v2.5.0"
     TITLE: str = f"量測數據分析工具 (Pro版) {VERSION}"
     LOG_FILENAME: str = "measurement_analyzer.log"
     THEME_CONFIG_FILE: str = "theme_config.txt"
@@ -30,6 +30,15 @@ class AppConfig:
         UNIT = '單位'
         ORIGINAL_JUDGE = '判斷'
         ORIGINAL_JUDGE_PDF = '判断'
+        TYPE = '類型'              # [v2.5.0]
+        SAMPLE_COUNT = '樣本數'    # [v2.5.0]
+        NG_COUNT = 'NG數'          # [v2.5.0]
+        DEFECT_RATE = '不良率(%)'  # [v2.5.0]
+        CPK = 'CPK'
+        SUGGESTED_TOLERANCE = '建議公差'  # [v2.3.0]
+        AVERAGE = '平均值'
+        MAXIMUM = '最大值'
+        MINIMUM = '最小值'
 
 
 # 顯示欄位列表
@@ -43,6 +52,17 @@ DISPLAY_COLUMNS = [
 # 版本更新紀錄
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+[v2.5.0] - 2026/01/12
+1. [新增] 2D 測量進階功能：
+   - 2D 散佈圖 (XY Scatter Plot)、直方圖、趨勢圖
+   - 2D 徑向公差 CPK (CPU) 與建議公差計算 (Rayleigh模型)
+2. [新增] 陣列熱力圖 (AA區平面度)：
+   - 支援顯示陣列數據的 2D 熱力圖 (所有樣本平均值)
+   - 自動識別陣列測項與維度
+3. [優化] 統計列表：
+   - 合併顯示 2D 測項功能 (預設開啟)
+   - 主表整合顯示 2D 建議公差與 CPK
+
 [v2.4.0] - 2026/01/09
 1. [重構] 程式碼模組化拆分
    - config.py: 設定常數
