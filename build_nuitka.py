@@ -41,8 +41,8 @@ def build_with_nuitka():
         
         # 基本設定 - 使用 standalone 模式
         "--standalone",                    # 獨立執行，包含所有依賴
-        # "--onefile",                     # 單一執行檔 (停用，避免資源嵌入問題)
-        f"--output-dir={OUTPUT_DIR}",
+        "--onefile",                     # 單一執行檔 (停用，避免資源嵌入問題)
+        #"--output-dir={OUTPUT_DIR}",
         
         # Windows 設定
         "--windows-disable-console",       # 隱藏主控台 (GUI 程式)
@@ -78,7 +78,7 @@ def build_with_nuitka():
         "--nofollow-import-to=PySide6",
         
         # 效能優化
-        "--assume-yes-for-downloads",      # 自動下載 C 編譯器 (首次)
+        # "--assume-yes-for-downloads",      # 自動下載 C 編譯器 (首次)
         # "--remove-output",               # 保留中間檔案（加速後續編譯）
         
         # 主程式

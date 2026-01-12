@@ -15,7 +15,8 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHeaderView, QProgressBar, QMessageBox, QGroupBox, QCheckBox, 
                              QInputDialog, QAbstractItemView, QTabWidget, QHBoxLayout, 
-                             QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem)
+                             QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem,
+                             QDialog, QTextEdit)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QBrush
 
@@ -23,7 +24,7 @@ from PyQt6.QtGui import QColor, QBrush
 from config import AppConfig, DISPLAY_COLUMNS
 from statistics import calculate_cpk, calculate_tolerance_for_yield
 from parsers import natural_keys, HAS_PDF_SUPPORT
-from widgets import NumericTableWidgetItem, VersionDialog, DistributionPlotDialog, XYScatterPlotDialog, ArrayHeatmapDialog
+from widgets import NumericTableWidgetItem, VersionDialog, DistributionPlotDialog, XYScatterPlotDialog, ArrayHeatmapDialog, FileTreeWidget
 from workers import FileLoaderThread
 from xy_analyzer import classify_project_name, MeasurementType, get_xy_group_id
 
@@ -170,6 +171,12 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.tab_raw = QWidget()
         self.setup_raw_data_tab()
         self.tabs.addTab(self.tab_raw, "2. 原始數據列表")
+
+        # [v2.5.1] File Management Tab
+        self.file_tree = FileTreeWidget()
+        self.file_tree.files_removed.connect(self.on_files_removed)
+        self.tabs.addTab(self.file_tree, "3. 檔案管理")
+
         main_layout.addWidget(self.tabs)
 
         self.progress_bar = QProgressBar()
@@ -238,7 +245,8 @@ class MeasurementAnalyzerApp(QMainWindow):
         layout.addLayout(control_layout)
 
         self.stats_table = QTableWidget()
-        cols = ["No", "測量專案", "類型", "樣本數", "NG數", "不良率(%)", "CPK", "建議公差(90%)", "平均值", "最大值", "最小值"]
+        # [v2.5.1] Added Upper/Lower columns
+        cols = ["No", "測量專案", "類型", "樣本數", "NG數", "不良率(%)", "CPK", "上限公差", "下限公差", "建議公差(90%)", "平均值", "最大值", "最小值"]
         self.stats_table.setColumnCount(len(cols))
         self.stats_table.setHorizontalHeaderLabels(cols)
         self.stats_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -275,13 +283,15 @@ class MeasurementAnalyzerApp(QMainWindow):
             duplicates = csv_bases.intersection(pdf_bases)
             
             if duplicates:
-                items = ["優先匯入 CSV (推薦)", "優先匯入 PDF", "全部匯入"]
+                items = ["優先匯入 CSV (推薦)", "優先匯入 PDF", "僅匯入 CSV (忽略所有 PDF)", "全部匯入"]
                 item, ok = QInputDialog.getItem(self, "發現重複報告", 
                                                 f"發現 {len(duplicates)} 組同名報告 (同時有 CSV 與 PDF)。\n"
                                                 "為避免數據重複，請選擇匯入策略：", 
                                                 items, 0, False)
                 if ok and item:
-                    if "CSV" in item:
+                    if "忽略所有 PDF" in item:
+                        files_to_load = csv_files
+                    elif "CSV" in item:
                         pdf_unique = [f for f in pdf_files if os.path.splitext(os.path.basename(f))[0] not in csv_bases]
                         files_to_load = csv_files + pdf_unique
                     elif "PDF" in item:
@@ -305,6 +315,9 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.loader_thread.progress_updated.connect(self.on_progress_updated)
         self.loader_thread.data_loaded.connect(self.on_data_loaded)
         self.loader_thread.start()
+        
+        # [v2.5.1] Update File Tree
+        self.file_tree.add_folder(folder_path, files_to_load)
 
     def set_ui_loading_state(self, is_loading):
         self.btn_add.setEnabled(not is_loading)
@@ -315,7 +328,7 @@ class MeasurementAnalyzerApp(QMainWindow):
         self.progress_bar.setValue(value)
         self.lbl_info.setText(message)
 
-    def on_data_loaded(self, new_data_frames, loaded_filenames):
+    def on_data_loaded(self, new_data_frames, loaded_filenames, errors):
         import time
         start_time = time.time()
         
@@ -338,11 +351,64 @@ class MeasurementAnalyzerApp(QMainWindow):
             logging.info(f"載入完成: {len(loaded_filenames)} 檔案, {len(new_data)} 筆, 耗時 {elapsed:.2f}秒")
             
             self.lbl_info.setText(msg)
-            QMessageBox.information(self, "完成", f"已加入 {len(loaded_filenames)} 個檔案。")
+            
+            if errors:
+                error_msg = "\n".join(errors[:20])
+                if len(errors) > 20: error_msg += f"\n... (共 {len(errors)} 個錯誤)"
+                QMessageBox.warning(self, "完成 (含錯誤)", f"已加入 {len(loaded_filenames)} 個檔案，但部分檔案發生錯誤：\n\n{error_msg}")
+            else:
+                QMessageBox.information(self, "完成", f"已加入 {len(loaded_filenames)} 個檔案。")
         else:
             self.lbl_info.setText("無有效數據。")
-            QMessageBox.warning(self, "結果", "未提取到有效數據。")
+            
+            if errors:
+                # Show detailed error report
+                error_msg = "\n".join(errors[:30])
+                if len(errors) > 30: error_msg += f"\n... (共 {len(errors)} 個錯誤)"
+                
+                dlg = QDialog(self)
+                dlg.setWindowTitle("詳細錯誤報告")
+                dlg.resize(600, 400)
+                layout = QVBoxLayout(dlg)
+                txt = QTextEdit()
+                txt.setReadOnly(True)
+                txt.setText(f"以下檔案無法讀取：\n\n{error_msg}")
+                layout.addWidget(txt)
+                btn = QPushButton("關閉")
+                btn.clicked.connect(dlg.accept)
+                layout.addWidget(btn)
+                formatted_msg = "未提取到有效數據，請檢查錯誤報告。"
+                QMessageBox.warning(self, "結果", formatted_msg)
+                dlg.exec()
+            else:
+                QMessageBox.warning(self, "結果", "未提取到有效數據 (無明確錯誤)。")
+
         self.set_ui_loading_state(False)
+
+    def on_files_removed(self, removed_filenames):
+        """[v2.5.1] Handle file removal from tree"""
+        if self.all_data.empty: return
+        
+        initial_count = len(self.all_data)
+        # Filter out removed files
+        # Check if '檔案名稱' (AppConfig.Columns.FILE) is in removed_filenames
+        # Note: removed_filenames contains basenames (e.g. 'data.csv')
+        # But '檔案名稱' column usually stores basename (from parsers.py).
+        # Let's verify what parsers put in FILE column. Usually basename.
+        
+        self.all_data = self.all_data[~self.all_data[AppConfig.Columns.FILE].isin(removed_filenames)]
+        
+        # Also update loaded_files set (these are full paths)
+        # We need to filter based on basename matching
+        import os
+        self.loaded_files = {f for f in self.loaded_files if os.path.basename(f) not in removed_filenames}
+        
+        final_count = len(self.all_data)
+        removed_rows = initial_count - final_count
+        
+        self.lbl_info.setText(f"已移除檔案。資料減少 {removed_rows} 筆。")
+        self.calculate_and_refresh_stats()
+        self.refresh_raw_table()
 
     def on_merge_2d_changed(self, state):
         """[v2.5.0] 合併 2D 顯示切換事件處理"""
@@ -363,6 +429,7 @@ class MeasurementAnalyzerApp(QMainWindow):
             self.lbl_stats_summary.setText("資料已清空")
             self.chk_only_fail.setEnabled(False)
             self.btn_export.setEnabled(False)
+            self.file_tree.clear() # [v2.5.1] Clear tree
 
     def refresh_raw_table(self):
         if self.all_data.empty: return
@@ -642,8 +709,17 @@ class MeasurementAnalyzerApp(QMainWindow):
                 else: cpk_item.setBackground(QBrush(QColor(200, 255, 200)))
 
             self.stats_table.setItem(r, 6, cpk_item)
+
+            # [v2.5.1] New Tolerance Columns
+            # Upper Tolerance
+            up_val = row.get('_upper', 0)
+            self.stats_table.setItem(r, 7, NumericTableWidgetItem(f"{up_val:.4f}"))
             
-            # [v2.3.0] 建議公差 Display Logic
+            # Lower Tolerance
+            low_val = row.get('_lower', 0)
+            self.stats_table.setItem(r, 8, NumericTableWidgetItem(f"{low_val:.4f}"))
+            
+            # [v2.3.0] 建議公差 Display Logic (Calculated Index shifted to 9)
             tol_val = row['建議公差']
             tol_reliability = row.get('TOL_RELIABILITY', 'invalid')
             tol_upper = row.get('TOL_UPPER', np.nan)
@@ -691,10 +767,10 @@ class MeasurementAnalyzerApp(QMainWindow):
                         elif tol_val < current_tol * 0.8:  # 建議公差比當前小 20%
                             tol_item.setBackground(QBrush(QColor(220, 255, 220)))  # 淺綠：規格充裕
             
-            self.stats_table.setItem(r, 7, tol_item)
-            self.stats_table.setItem(r, 8, NumericTableWidgetItem(f"{row['平均值']:.4f}"))
-            self.stats_table.setItem(r, 9, NumericTableWidgetItem(f"{row['最大值']:.4f}"))
-            self.stats_table.setItem(r, 10, NumericTableWidgetItem(f"{row['最小值']:.4f}"))
+            self.stats_table.setItem(r, 9, tol_item)
+            self.stats_table.setItem(r, 10, NumericTableWidgetItem(f"{row['平均值']:.4f}"))
+            self.stats_table.setItem(r, 11, NumericTableWidgetItem(f"{row['最大值']:.4f}"))
+            self.stats_table.setItem(r, 12, NumericTableWidgetItem(f"{row['最小值']:.4f}"))
         self.stats_table.setSortingEnabled(True)
         self.lbl_info.setText("統計數據更新完成。")
 

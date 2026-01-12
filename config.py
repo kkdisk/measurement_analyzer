@@ -9,7 +9,7 @@ from dataclasses import dataclass
 @dataclass
 class AppConfig:
     """應用程式設定"""
-    VERSION: str = "v2.5.1"
+    VERSION: str = "v2.5.2"
     TITLE: str = f"量測數據分析工具 (Pro版) {VERSION}"
     LOG_FILENAME: str = "measurement_analyzer.log"
     THEME_CONFIG_FILE: str = "theme_config.txt"
@@ -52,6 +52,16 @@ DISPLAY_COLUMNS = [
 # 版本更新紀錄
 UPDATE_LOG = """
 === 版本更新紀錄 ===
+[v2.5.2] - 2026/01/12
+1. [新增] 檔案管理功能 (File Management)：
+   - 新增「3. 檔案管理」分頁，可檢視已載入的檔案列表 (樹狀結構)。
+   - 支援移除個別檔案或資料夾，並即時更新統計數據。
+2. [新增] 統計列表公差顯示：
+   -  статисти表新增「上限公差」與「下限公差」欄位。
+3. [優化] 匯入選項 (Smart Import)：
+   - 移除了常駐的「僅匯入 CSV」勾選框，保持介面簡潔。
+   - 發現重複檔案的對話框中新增「僅匯入 CSV (忽略所有 PDF)」選項，自動處理衝突。
+
 [v2.5.1] - 2026/01/12
 1. [新增] 2D 散佈圖功能增強：
    - 支援手動調整徑向公差並即時更新判定。

@@ -937,3 +937,120 @@ class ArrayHeatmapDialog(QDialog):
             
         layout.addWidget(txt)
 
+
+from PyQt6.QtWidgets import QTreeWidget, QTreeWidgetItem, QMessageBox
+from PyQt6.QtCore import pyqtSignal
+
+class FileTreeWidget(QWidget):
+    """[v2.5.1] 檔案管理樹狀列表元件"""
+    files_removed = pyqtSignal(set)  # Signal emitting set of removed filenames
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        
+        # Controls
+        btn_layout = QHBoxLayout()
+        self.btn_remove = QPushButton("移除選定項目 (Remove Selected)")
+        self.btn_remove.clicked.connect(self.remove_selected)
+        self.btn_remove.setStyleSheet("color: red;")
+        btn_layout.addWidget(self.btn_remove)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        # Tree Widget
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("已載入檔案列表")
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        layout.addWidget(self.tree)
+        
+        self.folder_items = {} # Path -> QTreeWidgetItem
+    
+    def add_folder(self, folder_path, file_list):
+        """加入資料夾與檔案節點"""
+        import os
+        
+        # Create or get folder item
+        if folder_path not in self.folder_items:
+            folder_item = QTreeWidgetItem(self.tree)
+            folder_item.setText(0, folder_path)
+            folder_item.setExpanded(True)
+            self.folder_items[folder_path] = folder_item
+        else:
+            folder_item = self.folder_items[folder_path]
+            
+        # Add files
+        for f in file_list:
+            fname = os.path.basename(f)
+            # Avoid duplicates under same folder
+            exists = False
+            for i in range(folder_item.childCount()):
+                if folder_item.child(i).text(0) == fname:
+                    exists = True
+                    break
+            if not exists:
+                file_item = QTreeWidgetItem(folder_item)
+                file_item.setText(0, fname)
+                file_item.setToolTip(0, f) # Store full path in tooltip
+                
+    def clear(self):
+        self.tree.clear()
+        self.folder_items.clear()
+        
+    def remove_selected(self):
+        """移除選定的檔案或資料夾"""
+        selected_items = self.tree.selectedItems()
+        if not selected_items:
+            return
+            
+        # Confirm
+        reply = QMessageBox.question(
+            self, "確認移除", 
+            f"確定要移除選定的 {len(selected_items)} 個項目嗎?\n"
+            "(此操作僅從統計中移除，不會刪除實體檔案)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+            
+        files_to_remove = set()
+        items_to_delete = []
+        
+        import os
+        
+        for item in selected_items:
+            parent = item.parent()
+            if parent: 
+                # Is a file node
+                full_path = item.toolTip(0)
+                if full_path:
+                    files_to_remove.add(os.path.basename(full_path)) # Using basename as ID for now logic
+                items_to_delete.append(item)
+            else:
+                # Is a folder node
+                # Collect all children
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    full_path = child.toolTip(0)
+                    if full_path:
+                        files_to_remove.add(os.path.basename(full_path))
+                items_to_delete.append(item)
+                # Remove from tracking dict
+                path = item.text(0)
+                if path in self.folder_items:
+                    del self.folder_items[path]
+        
+        # Remove from UI
+        # Need to be careful removing items while iterating, though here we collected them first
+        for item in items_to_delete:
+            parent = item.parent()
+            if parent:
+                parent.removeChild(item)
+            else:
+                index = self.tree.indexOfTopLevelItem(item)
+                self.tree.takeTopLevelItem(index)
+                
+        if files_to_remove:
+            self.files_removed.emit(files_to_remove)
+            QMessageBox.information(self, "已移除", f"已從分析中移除 {len(files_to_remove)} 個檔案。")

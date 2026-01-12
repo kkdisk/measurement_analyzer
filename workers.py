@@ -15,7 +15,7 @@ from parsers import find_header_row_and_date_csv, read_pdf_file
 class FileLoaderThread(QThread):
     """檔案讀取背景執行緒"""
     progress_updated = pyqtSignal(int, str)
-    data_loaded = pyqtSignal(list, set)
+    data_loaded = pyqtSignal(list, set, list) # [v2.5.3] Added errors list
     error_occurred = pyqtSignal(str)
 
     def __init__(self, file_paths):
@@ -26,6 +26,7 @@ class FileLoaderThread(QThread):
     def run(self):
         new_data_frames = []
         loaded_filenames = set()
+        errors = [] # [v2.5.3] Collect errors details
         for i, filepath in enumerate(self.file_paths):
             if not self._is_running: break
             filename = os.path.basename(filepath)
@@ -50,6 +51,8 @@ class FileLoaderThread(QThread):
                     if header_idx is not None:
                         df = pd.read_csv(filepath, skiprows=header_idx, header=0, 
                                        encoding=encoding, on_bad_lines='skip', index_col=False)
+                    else:
+                        errors.append(f"{filename}: 無法識別標題列 (Header not found)")
                 
                 if df is not None:
                     loaded_filenames.add(filename)
@@ -98,10 +101,19 @@ class FileLoaderThread(QThread):
                         
                         cols = [c for c in DISPLAY_COLUMNS if c in df.columns]
                         new_data_frames.append(df[cols])
+                    else:
+                         missing = [c for c in required if c not in df.columns]
+                         errors.append(f"{filename}: 缺少必要欄位 {missing}")
+                elif ext != '.pdf' and header_idx is None:
+                    pass # Already handled above
+                elif df is None:
+                    errors.append(f"{filename}: 讀取失敗或內容為空")
+
             except Exception as e:
+                errors.append(f"{filename}: 系統錯誤 ({str(e)})")
                 logging.error(f"Error processing {filename}: {e}\n{traceback.format_exc()}")
 
-        self.data_loaded.emit(new_data_frames, loaded_filenames)
+        self.data_loaded.emit(new_data_frames, loaded_filenames, errors)
 
     def stop(self):
         self._is_running = False
